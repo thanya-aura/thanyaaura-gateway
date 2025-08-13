@@ -4,6 +4,6 @@ httpx
 pydantic
 python-dotenv
 asgiref
-gunicorn
 python-multipart
+gunicorn
 psycopg[binary]
