@@ -56,10 +56,18 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
-@app.get("/check-env")
-def check_env():
-    return {
-        "LOG_LEVEL": os.getenv("LOG_LEVEL"),
-        "DATABASE_URL_start": os.getenv("DATABASE_URL", "")[:12],
-        "THRIVECART_SECRET_start": os.getenv("THRIVECART_SECRET", "")[:4]
-    }
+from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+
+# สมมติว่าก่อนหน้านี้มีบรรทัด: app = FastAPI()
+
+@app.get("/", include_in_schema=False)
+def root():
+    # จะเลือก redirect ไป /docs หรือส่ง JSON ก็ได้
+    return RedirectResponse(url="/docs")
+    # หรือใช้แบบ JSON:
+    # return {"ok": True, "service": "thanyaaura-gateway"}
+
+@app.get("/health", include_in_schema=False)
+def health():
+    return {"status": "ok"}
