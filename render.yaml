@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: thanayaura-gateway
+    name: thanayaura-gateway-1
     env: python
     plan: starter
     region: singapore
