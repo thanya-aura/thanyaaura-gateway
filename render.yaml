@@ -1,9 +1,8 @@
 services:
   - type: web
-    name: thanayaura-gateway-1
+    name: thanyaaura-gateway-1
     env: python
-    plan: starter
-    region: singapore
+    plan: free
     buildCommand: "pip install -r requirements.txt"
     startCommand: "gunicorn app.main:app -k uvicorn.workers.UvicornWorker"
     envVars:
