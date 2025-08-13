@@ -113,4 +113,16 @@ async def thrivecart_webhook(request: Request):
     # TODO: ใส่โค้ด UPSERT ลง DB (users/subscriptions/agent_entitlements) ตรงนี้เมื่อพร้อม
     return {"ok": True}
 
-# (มี /health อยู่แล้ว ไม่ต้องแก้)
+from fastapi import FastAPI, Request, HTTPException, Response
+# app = FastAPI()  # มีอยู่แล้ว
+
+@app.head("/billing/thrivecart", include_in_schema=False)
+def thrivecart_head():
+    # ให้ ThriveCart เช็ก HEAD แล้วได้ 200
+    return Response(status_code=200)
+
+@app.get("/billing/thrivecart", include_in_schema=False)
+def thrivecart_get():
+    # เปิด GET ให้ 200 เฉยๆ (ไม่เปิดข้อมูลใดๆ)
+    return {"ok": True}
+
