@@ -6,3 +6,4 @@ python-dotenv
 asgiref
 gunicorn
 python-multipart
+psycopg[binary]
