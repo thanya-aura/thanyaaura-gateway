@@ -49,3 +49,17 @@ async def run(req: RunReq, request: Request):
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Internal error: {e}")
+
+
+import os
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/check-env")
+def check_env():
+    return {
+        "LOG_LEVEL": os.getenv("LOG_LEVEL"),
+        "DATABASE_URL_start": os.getenv("DATABASE_URL", "")[:12],
+        "THRIVECART_SECRET_start": os.getenv("THRIVECART_SECRET", "")[:4]
+    }

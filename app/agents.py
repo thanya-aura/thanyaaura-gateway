@@ -1,35 +1,45 @@
 AGENT_SPECS = {
-    "CFS": {"name":"CFS", "providers":["openai","gemini"], "endpoint":"https://ai-finance-api-3.onrender.com", "github":"https://github.com/thanya-aura/ai-finance-api"},
-    "CFP": {"name":"CFP", "providers":["openai","gemini"], "endpoint":"https://ai-finance-api-3.onrender.com", "github":"https://github.com/thanya-aura/ai-finance-api"},
-    "CFPR": {"name":"CFPR", "providers":["openai","gemini"], "endpoint":"https://ai-finance-api-3.onrender.com", "github":"https://github.com/thanya-aura/ai-finance-api"},
-    "REVS": {"name":"REVS", "providers":["openai","gemini"], "endpoint":"https://ai-revenue-api.onrender.com", "github":"https://github.com/thanya-aura/ai_revenue_api"},
-    "REVP": {"name":"REVP", "providers":["openai","gemini"], "endpoint":"https://ai-revenue-api.onrender.com", "github":"https://github.com/thanya-aura/ai_revenue_api"},
-    "REVPR": {"name":"REVPR", "providers":["openai","gemini"], "endpoint":"https://ai-revenue-api.onrender.com", "github":"https://github.com/thanya-aura/ai_revenue_api"},
-    "CAPEXS": {"name":"CAPEXS", "providers":["openai","gemini"], "endpoint":"https://ai-capex-api.onrender.com", "github":"https://github.com/thanya-aura/ai-capex-api.git"},
-    "CAPEXP": {"name":"CAPEXP", "providers":["openai","gemini"], "endpoint":"https://ai-capex-api.onrender.com", "github":"https://github.com/thanya-aura/ai-capex-api.git"},
+    "CFS":   {"name":"CFS",   "providers":["openai","gemini"], "endpoint":"https://ai-finance-api-3.onrender.com", "github":"https://github.com/thanya-aura/ai-finance-api"},
+    "CFP":   {"name":"CFP",   "providers":["openai","gemini"], "endpoint":"https://ai-finance-api-3.onrender.com", "github":"https://github.com/thanya-aura/ai-finance-api"},
+    "CFPR":  {"name":"CFPR",  "providers":["openai","gemini"], "endpoint":"https://ai-finance-api-3.onrender.com", "github":"https://github.com/thanya-aura/ai-finance-api"},
+
+    "REVS":  {"name":"REVS",  "providers":["openai","gemini"], "endpoint":"https://ai-revenue-api.onrender.com",   "github":"https://github.com/thanya-aura/ai_revenue_api"},
+    "REVP":  {"name":"REVP",  "providers":["openai","gemini"], "endpoint":"https://ai-revenue-api.onrender.com",   "github":"https://github.com/thanya-aura/ai_revenue_api"},
+    "REVPR": {"name":"REVPR", "providers":["openai","gemini"], "endpoint":"https://ai-revenue-api.onrender.com",   "github":"https://github.com/thanya-aura/ai_revenue_api"},
+
+    "CAPEXS":  {"name":"CAPEXS",  "providers":["openai","gemini"], "endpoint":"https://ai-capex-api.onrender.com", "github":"https://github.com/thanya-aura/ai-capex-api.git"},
+    "CAPEXP":  {"name":"CAPEXP",  "providers":["openai","gemini"], "endpoint":"https://ai-capex-api.onrender.com", "github":"https://github.com/thanya-aura/ai-capex-api.git"},
     "CAPEXPR": {"name":"CAPEXPR", "providers":["openai","gemini"], "endpoint":"https://ai-capex-api.onrender.com", "github":"https://github.com/thanya-aura/ai-capex-api.git"},
-    "FXS": {"name":"FXS", "providers":["openai","gemini"], "endpoint":"https://ai-fx-api.onrender.com", "github":"https://github.com/thanya-aura/ai-fx-api.git"},
-    "FXP": {"name":"FXP", "providers":["openai","gemini"], "endpoint":"https://ai-fx-api.onrender.com", "github":"https://github.com/thanya-aura/ai-fx-api.git"},
+
+    "FXS":  {"name":"FXS",  "providers":["openai","gemini"], "endpoint":"https://ai-fx-api.onrender.com", "github":"https://github.com/thanya-aura/ai-fx-api.git"},
+    "FXP":  {"name":"FXP",  "providers":["openai","gemini"], "endpoint":"https://ai-fx-api.onrender.com", "github":"https://github.com/thanya-aura/ai-fx-api.git"},
     "FXPR": {"name":"FXPR", "providers":["openai","gemini"], "endpoint":"https://ai-fx-api.onrender.com", "github":"https://github.com/thanya-aura/ai-fx-api.git"},
-    "COSTS": {"name":"COSTS", "providers":["openai","gemini"], "endpoint":"https://ai-cost-api.onrender.com", "github":"https://github.com/thanya-aura/ai-cost-api.git"},
-    "COSTP": {"name":"COSTP", "providers":["openai","gemini"], "endpoint":"https://ai-cost-api.onrender.com", "github":"https://github.com/thanya-aura/ai-cost-api.git"},
+
+    "COSTS":  {"name":"COSTS",  "providers":["openai","gemini"], "endpoint":"https://ai-cost-api.onrender.com", "github":"https://github.com/thanya-aura/ai-cost-api.git"},
+    "COSTP":  {"name":"COSTP",  "providers":["openai","gemini"], "endpoint":"https://ai-cost-api.onrender.com", "github":"https://github.com/thanya-aura/ai-cost-api.git"},
     "COSTPR": {"name":"COSTPR", "providers":["openai","gemini"], "endpoint":"https://ai-cost-api.onrender.com", "github":"https://github.com/thanya-aura/ai-cost-api.git"},
-    "BUDS": {"name":"BUDS", "providers":["openai","gemini"], "endpoint":"https://ai-budget-api.onrender.com", "github":"https://github.com/thanya-aura/ai-budget-api.git"},
-    "BUDP": {"name":"BUDP", "providers":["openai","gemini"], "endpoint":"https://ai-budget-api.onrender.com", "github":"https://github.com/thanya-aura/ai-budget-api.git"},
+
+    "BUDS":  {"name":"BUDS",  "providers":["openai","gemini"], "endpoint":"https://ai-budget-api.onrender.com", "github":"https://github.com/thanya-aura/ai-budget-api.git"},
+    "BUDP":  {"name":"BUDP",  "providers":["openai","gemini"], "endpoint":"https://ai-budget-api.onrender.com", "github":"https://github.com/thanya-aura/ai-budget-api.git"},
     "BUDPR": {"name":"BUDPR", "providers":["openai","gemini"], "endpoint":"https://ai-budget-api.onrender.com", "github":"https://github.com/thanya-aura/ai-budget-api.git"},
-    "REPS": {"name":"REPS", "providers":["openai","gemini"], "endpoint":"https://ai-report-api.onrender.com", "github":"https://github.com/thanya-aura/ai-report-api.git"},
-    "REPP": {"name":"REPP", "providers":["openai","gemini"], "endpoint":"https://ai-report-api.onrender.com", "github":"https://github.com/thanya-aura/ai-report-api.git"},
+
+    "REPS":  {"name":"REPS",  "providers":["openai","gemini"], "endpoint":"https://ai-report-api.onrender.com", "github":"https://github.com/thanya-aura/ai-report-api.git"},
+    "REPP":  {"name":"REPP",  "providers":["openai","gemini"], "endpoint":"https://ai-report-api.onrender.com", "github":"https://github.com/thanya-aura/ai-report-api.git"},
     "REPPR": {"name":"REPPR", "providers":["openai","gemini"], "endpoint":"https://ai-report-api.onrender.com", "github":"https://github.com/thanya-aura/ai-report-api.git"},
-    "VARS": {"name":"VARS", "providers":["openai","gemini"], "endpoint":"https://ai-variance-api.onrender.com", "github":"https://github.com/thanya-aura/ai-variance-api.git"},
-    "VARP": {"name":"VARP", "providers":["openai","gemini"], "endpoint":"https://ai-variance-api.onrender.com", "github":"https://github.com/thanya-aura/ai-variance-api.git"},
+
+    "VARS":  {"name":"VARS",  "providers":["openai","gemini"], "endpoint":"https://ai-variance-api.onrender.com", "github":"https://github.com/thanya-aura/ai-variance-api.git"},
+    "VARP":  {"name":"VARP",  "providers":["openai","gemini"], "endpoint":"https://ai-variance-api.onrender.com", "github":"https://github.com/thanya-aura/ai-variance-api.git"},
     "VARPR": {"name":"VARPR", "providers":["openai","gemini"], "endpoint":"https://ai-variance-api.onrender.com", "github":"https://github.com/thanya-aura/ai-variance-api.git"},
-    "MARS": {"name":"MARS", "providers":["openai","gemini"], "endpoint":"https://ai-margin-api.onrender.com", "github":"https://github.com/thanya-aura/ai-margin-api.git"},
-    "MARP": {"name":"MARP", "providers":["openai","gemini"], "endpoint":"https://ai-margin-api.onrender.com", "github":"https://github.com/thanya-aura/ai-margin-api.git"},
+
+    "MARS":  {"name":"MARS",  "providers":["openai","gemini"], "endpoint":"https://ai-margin-api.onrender.com", "github":"https://github.com/thanya-aura/ai-margin-api.git"},
+    "MARP":  {"name":"MARP",  "providers":["openai","gemini"], "endpoint":"https://ai-margin-api.onrender.com", "github":"https://github.com/thanya-aura/ai-margin-api.git"},
     "MARPR": {"name":"MARPR", "providers":["openai","gemini"], "endpoint":"https://ai-margin-api.onrender.com", "github":"https://github.com/thanya-aura/ai-margin-api.git"},
-    "FORS": {"name":"FORS", "providers":["openai","gemini"], "endpoint":"https://ai-forecast-api.onrender.com", "github":"https://github.com/thanya-aura/ai-forecast-api.git"},
-    "FORP": {"name":"FORP", "providers":["openai","gemini"], "endpoint":"https://ai-forecast-api.onrender.com", "github":"https://github.com/thanya-aura/ai-forecast-api.git"},
+
+    "FORS":  {"name":"FORS",  "providers":["openai","gemini"], "endpoint":"https://ai-forecast-api.onrender.com", "github":"https://github.com/thanya-aura/ai-forecast-api.git"},
+    "FORP":  {"name":"FORP",  "providers":["openai","gemini"], "endpoint":"https://ai-forecast-api.onrender.com", "github":"https://github.com/thanya-aura/ai-forecast-api.git"},
     "FORPR": {"name":"FORPR", "providers":["openai","gemini"], "endpoint":"https://ai-forecast-api.onrender.com", "github":"https://github.com/thanya-aura/ai-forecast-api.git"},
-    "DECS": {"name":"DECS", "providers":["openai","gemini"], "endpoint":"https://ai-decision-api.onrender.com", "github":"https://github.com/thanya-aura/ai-decision-api.git"},
-    "DECP": {"name":"DECP", "providers":["openai","gemini"], "endpoint":"https://ai-decision-api.onrender.com", "github":"https://github.com/thanya-aura/ai-decision-api.git"},
-    "DESPR": {"name":"DESPR", "providers":["openai","gemini"], "endpoint":"https://ai-decision-api.onrender.com", "github":"https://github.com/thanya-aura/ai-decision-api.git"},
+
+    "DECS":  {"name":"DECS",  "providers":["openai","gemini"], "endpoint":"https://ai-decision-api.onrender.com", "github":"https://github.com/thanya-aura/ai-decision-api.git"},
+    "DECP":  {"name":"DECP",  "providers":["openai","gemini"], "endpoint":"https://ai-decision-api.onrender.com", "github":"https://github.com/thanya-aura/ai-decision-api.git"},
+    "DECPR": {"name":"DECPR", "providers":["openai","gemini"], "endpoint":"https://ai-decision-api.onrender.com", "github":"https://github.com/thanya-aura/ai-decision-api.git"}
 }
