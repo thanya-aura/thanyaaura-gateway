@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: thanayaura-gateway
+    env: python
+    plan: starter
+    region: singapore
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port 10000"
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MODEL_DEFAULT_OPENAI
+        value: gpt-5
+      - key: MODEL_DEFAULT_GEMINI
+        value: gemini-2.0-pro
+    healthCheckPath: /healthz
