@@ -71,3 +71,46 @@ def root():
 @app.get("/health", include_in_schema=False)
 def health():
     return {"status": "ok"}
+
+# app/main.py
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
+import os, logging
+
+# มีอยู่แล้ว:
+# app = FastAPI()
+
+@app.post("/billing/thrivecart")
+async def thrivecart_webhook(request: Request):
+    # รองรับทั้ง form-urlencoded (ค่า default ของ ThriveCart) และ JSON
+    content_type = (request.headers.get("content-type") or "").lower()
+    data = {}
+    if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form = await request.form()
+        data = dict(form)
+    else:
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+    # ตรวจ secret word ตามคู่มือ ThriveCart (field: thrivecart_secret)
+    expected = os.getenv("THRIVECART_SECRET", "")
+    provided = (data.get("thrivecart_secret") or "").strip()
+
+    if not expected:
+        raise HTTPException(status_code=500, detail="server secret missing")
+    if provided != expected:
+        raise HTTPException(status_code=401, detail="invalid secret")
+
+    # ดึงข้อมูลหลัก (ปรับได้ตามจริง)
+    email = data.get("customer[email]") or data.get("customer_email") or data.get("email")
+    event = data.get("event")  # เช่น order.success, order.subscription_cancelled
+    sku   = data.get("sku")    # ถ้าคุณส่ง sku มาด้วย
+
+    logging.getLogger("thrivecart").info(f"TC webhook ok: event=%s email=%s sku=%s", event, email, sku)
+
+    # TODO: ใส่โค้ด UPSERT ลง DB (users/subscriptions/agent_entitlements) ตรงนี้เมื่อพร้อม
+    return {"ok": True}
+
+# (มี /health อยู่แล้ว ไม่ต้องแก้)
