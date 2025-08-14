@@ -1,4 +1,4 @@
-# app/main.py — with built-in fallback resolver (CF family) + existing endpoints
+# app/main.py — Gateway app with robust SKU resolver and debug endpoints
 
 import os
 import re
@@ -6,7 +6,7 @@ import json
 from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request
 
-# --- try import real resolver from agents.py ---
+# --- try import real resolver/table from agents.py (Excel-aligned expected) ---
 try:
     from app.agents import get_agent_slug_from_sku, AGENT_SKU_TO_AGENT
 except Exception:
@@ -27,25 +27,14 @@ FALLBACK_SKU_TO_AGENT = {
     "enterprise_cf": "ENTERPRISE_CF_AI_AGENT",
 }
 
-def _fallback_resolve(sku: str) -> str | None:
-    s = (sku or "").strip().lower()
-    if s.startswith("module-0-"):
-        s = s[9:]
-    # try short, then prefixed, then legacy
-    return (
-        FALLBACK_SKU_TO_AGENT.get(s)
-        or FALLBACK_SKU_TO_AGENT.get(f"module-0-{s}")
-        or (s == "project_cf" and "PROJECT_CF_AI_AGENT")
-        or (s == "enterprise_cf" and "ENTERPRISE_CF_AI_AGENT")
-    )
+app = FastAPI(title="Thanyaaura Gateway", version="1.1.0")
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.0.0")
-
-def _drop_module_prefix(s: str) -> str:
+# -----------------------
+# Helpers: SKU extraction
+# -----------------------
+def _drop_module0(s: str) -> str:
     s = (s or "").strip().lower()
-    if s.startswith("module-0-"):
-        s = s[9:]
-    return s
+    return s[9:] if s.startswith("module-0-") else s
 
 def derive_sku_from_url(url_str: str | None) -> str | None:
     if not url_str:
@@ -53,30 +42,79 @@ def derive_sku_from_url(url_str: str | None) -> str | None:
     try:
         path = urlparse(url_str).path.lower()
         m = re.search(r"/module-0-([a-z0-9_]+)(?:/|$)", path)
-        if m:
-            return m.group(1)
+        return m.group(1) if m else None
     except Exception:
-        pass
-    return None
+        return None
 
 def derive_sku(data: dict) -> str | None:
+    """
+    Priority:
+      1) 'sku' or 'passthrough[sku]' (normalized & drop 'module-0-')
+      2) from fulfillment url: fulfillment[url] / fulfillment_url / fulfillment
+    """
     sku = data.get("sku") or data.get("passthrough[sku]")
     if sku:
-        return _drop_module_prefix(sku)
+        return _drop_module0(sku)
+
     f_url = data.get("fulfillment[url]") or data.get("fulfillment_url") or data.get("fulfillment")
-    return derive_sku_from_url(f_url)
+    slug = derive_sku_from_url(f_url)
+    return slug
 
 async def read_payload(request: Request) -> dict:
+    """
+    Accepts application/json and application/x-www-form-urlencoded
+    """
     ctype = (request.headers.get("content-type") or "").lower()
     if "application/json" in ctype:
         try:
-            body = await request.body()
-            return json.loads(body.decode("utf-8") or "{}")
+            raw = await request.body()
+            return json.loads(raw.decode("utf-8") or "{}")
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid JSON body")
     form = await request.form()
     return dict(form)
 
+# -----------------------
+# Resolver (layered)
+# -----------------------
+def _resolve_with_table(sku: str) -> str | None:
+    """Try direct table lookup if AGENT_SKU_TO_AGENT is available."""
+    if not AGENT_SKU_TO_AGENT:
+        return None
+    s = (sku or "").strip().lower()
+    return (
+        AGENT_SKU_TO_AGENT.get(s)
+        or AGENT_SKU_TO_AGENT.get(_drop_module0(s))
+        or AGENT_SKU_TO_AGENT.get(f"module-0-{_drop_module0(s)}")
+    )
+
+def _resolve_with_fallback(sku: str) -> str | None:
+    s = (sku or "").strip().lower()
+    return (
+        FALLBACK_SKU_TO_AGENT.get(s)
+        or FALLBACK_SKU_TO_AGENT.get(_drop_module0(s))
+        or FALLBACK_SKU_TO_AGENT.get(f"module-0-{_drop_module0(s)}")
+    )
+
+def resolve_agent_slug(sku: str) -> str | None:
+    """
+    Final resolver order:
+      1) get_agent_slug_from_sku (agents.py)
+      2) AGENT_SKU_TO_AGENT direct lookup (agents.py)
+      3) FALLBACK_SKU_TO_AGENT
+    """
+    if callable(get_agent_slug_from_sku):
+        agent = get_agent_slug_from_sku(sku)
+        if agent:
+            return agent
+    agent = _resolve_with_table(sku)
+    if agent:
+        return agent
+    return _resolve_with_fallback(sku)
+
+# -----------------------
+# Endpoints
+# -----------------------
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -87,14 +125,16 @@ async def routes():
 
 @app.get("/debug/resolve")
 async def debug_resolve(sku: str):
-    if callable(get_agent_slug_from_sku):
-        agent = get_agent_slug_from_sku(sku)
-    else:
-        agent = _fallback_resolve(sku)
-    return {"sku_in": sku, "agent_slug": agent}
+    """
+    Quick check: accepts 'cfp', 'module-0-cfp', 'project_cf', etc.
+    """
+    return {"sku_in": sku, "agent_slug": resolve_agent_slug(sku)}
 
 @app.get("/debug/sku-keys")
 async def debug_sku_keys():
+    """
+    Known keys sample from both AGENT_SKU_TO_AGENT (if present) and fallback table.
+    """
     keys = set()
     try:
         keys.update(list(AGENT_SKU_TO_AGENT.keys()))
@@ -103,8 +143,27 @@ async def debug_sku_keys():
     keys.update(FALLBACK_SKU_TO_AGENT.keys())
     return sorted(keys)
 
+@app.get("/debug/agents-state")
+async def debug_agents_state():
+    try:
+        from app import agents as _agents
+        table = getattr(_agents, "AGENT_SKU_TO_AGENT", {})
+        has_func = callable(getattr(_agents, "get_agent_slug_from_sku", None))
+        sample = sorted(table.keys())[:20] if isinstance(table, dict) else []
+        return {
+            "loaded": True,
+            "has_func": has_func,
+            "keys_count": len(table) if isinstance(table, dict) else 0,
+            "keys_sample": sample,
+        }
+    except Exception as e:
+        return {"loaded": False, "error": str(e)}
+
 @app.post("/billing/thrivecart")
 async def billing_thrivecart(request: Request):
+    """
+    ThriveCart webhook endpoint
+    """
     data = await read_payload(request)
 
     # Optional secret check (uncomment to enforce)
@@ -113,37 +172,29 @@ async def billing_thrivecart(request: Request):
     # if not secret_in or not secret_env or secret_in != secret_env:
     #     raise HTTPException(status_code=401, detail="Unauthorized")
 
+    # Extract SKU
     sku = derive_sku(data)
     if not sku:
         raise HTTPException(status_code=400, detail="Missing SKU (or fulfillment[url])")
 
-    if callable(get_agent_slug_from_sku):
-        agent_slug = get_agent_slug_from_sku(sku)
-    else:
-        agent_slug = _fallback_resolve(sku)
-
+    # Resolve -> agent_slug
+    agent_slug = resolve_agent_slug(sku)
     if not agent_slug:
-        known = (list(getattr(AGENT_SKU_TO_AGENT, "keys", lambda: [])())[:6]
-                 if AGENT_SKU_TO_AGENT else [])
-        known += list(FALLBACK_SKU_TO_AGENT.keys())[:6]
-        raise HTTPException(status_code=400, detail=f"Unknown SKU: {sku}. Try: {known} ...")
+        # show small hint to debug
+        known = []
+        try:
+            known.extend(list(AGENT_SKU_TO_AGENT.keys())[:6])
+        except Exception:
+            pass
+        known.extend(list(FALLBACK_SKU_TO_AGENT.keys())[:6])
+        raise HTTPException(status_code=400, detail=f"Unknown SKU: {sku}. Try one of: {known} ...")
 
-    # TODO: upsert subscriptions + entitlements (ของเดิมคุณ)
+    # TODO: upsert subscriptions & entitlements as per your original logic.
     return {
         "ok": True,
-        "sku": sku,
+        "sku": _drop_module0(sku),
         "agent_slug": agent_slug,
         "event": data.get("event"),
         "order_id": data.get("order_id") or data.get("invoice_id"),
         "email": data.get("customer[email]") or data.get("email"),
     }
-
-@app.get("/debug/agents-state")
-async def debug_agents_state():
-    try:
-        from app import agents as _agents
-        keys = sorted(getattr(_agents, "AGENT_SKU_TO_AGENT", {}).keys())[:20]
-        has_func = callable(getattr(_agents, "get_agent_slug_from_sku", None))
-        return {"loaded": True, "has_func": has_func, "keys_sample": keys, "keys_count": len(getattr(_agents, "AGENT_SKU_TO_AGENT", {}))}
-    except Exception as e:
-        return {"loaded": False, "error": str(e)}
