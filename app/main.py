@@ -1,34 +1,36 @@
-# app/main.py — Thanyaaura Gateway (health/routes/debug + billing/thrivecart + DB upsert)
+# main.py
 import os
 import re
 import json
 import importlib
 import logging
 from urllib.parse import urlparse
+from json import JSONDecodeError
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
 log = logging.getLogger("thanyaaura.gateway")
 logging.basicConfig(level=logging.INFO)
 
-# ===== try import real resolver/table from agents.py =====
+# ===== Try import real resolver/table from agents.py =====
 try:
     from app.agents import get_agent_slug_from_sku, AGENT_SKU_TO_AGENT  # noqa
     log.info("Loaded resolver from app.agents (keys=%s)", len(AGENT_SKU_TO_AGENT or {}))
-except Exception as e:  # pragma: no cover
-    log.warning("agents.py not loaded, using fallback (%s)", e)
+except ImportError as ex_import:
+    log.warning("agents.py not loaded, using fallback (%s)", ex_import)
+    get_agent_slug_from_sku = None
+    AGENT_SKU_TO_AGENT = {}
+except Exception as ex_generic:
+    log.warning("Unexpected error loading agents.py: %s", ex_generic)
     get_agent_slug_from_sku = None
     AGENT_SKU_TO_AGENT = {}
 
 # ===== FULL FALLBACK (33 agents) =====
 _BASE_FALLBACK = {
     # Cashflow (3) + aliases
-    "cfs": "SINGLE_CF_AI_AGENT",
-    "cfp": "PROJECT_CF_AI_AGENT",
-    "cfpr": "ENTERPRISE_CF_AI_AGENT",
-    "single_cf": "SINGLE_CF_AI_AGENT",
-    "project_cf": "PROJECT_CF_AI_AGENT",
-    "enterprise_cf": "ENTERPRISE_CF_AI_AGENT",
+    "cfs": "SINGLE_CF_AI_AGENT", "cfp": "PROJECT_CF_AI_AGENT", "cfpr": "ENTERPRISE_CF_AI_AGENT",
+    "single_cf": "SINGLE_CF_AI_AGENT", "project_cf": "PROJECT_CF_AI_AGENT", "enterprise_cf": "ENTERPRISE_CF_AI_AGENT",
     # Revenue (3)
     "revs": "REVENUE_STANDARD", "revp": "REVENUE_INTERMEDIATE", "revpr": "REVENUE_ADVANCE",
     "revenue_standard": "REVENUE_STANDARD", "revenue_intermediate": "REVENUE_INTERMEDIATE", "revenue_advance": "REVENUE_ADVANCE",
@@ -64,14 +66,10 @@ FALLBACK_SKU_TO_AGENT = dict(_BASE_FALLBACK)
 for k, v in list(_BASE_FALLBACK.items()):
     FALLBACK_SKU_TO_AGENT[f"module-0-{k}"] = v
 
-# ===== Tier SKUs (STANDARD / PLUS / PREMIUM) =====
+# ===== Tier SKUs =====
 _BASE_TIER = {
-    "standard": "STANDARD",
-    "plus": "PLUS",
-    "premium": "PREMIUM",
-    "tier_standard": "STANDARD",
-    "tier_plus": "PLUS",
-    "tier_premium": "PREMIUM",
+    "standard": "STANDARD", "plus": "PLUS", "premium": "PREMIUM",
+    "tier_standard": "STANDARD", "tier_plus": "PLUS", "tier_premium": "PREMIUM",
 }
 TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
@@ -79,9 +77,9 @@ for k, v in list(_BASE_TIER.items()):
 
 app = FastAPI(title="Thanyaaura Gateway", version="1.5.0")
 
-# ======================
+# ----------------------
 # Helpers
-# ======================
+# ----------------------
 def _drop_module0(s: str) -> str:
     s = (s or "").strip().lower()
     return s[9:] if s.startswith("module-0-") else s
@@ -91,8 +89,8 @@ def derive_sku_from_url(url_str: str | None) -> str | None:
         return None
     try:
         path = urlparse(url_str).path.lower()
-        m = re.search(r"/module-0-([a-z0-9_]+)(?:/|$)", path)
-        return m.group(1) if m else None
+        match = re.search(r"/module-0-([a-z0-9_]+)(?:/|$)", path)
+        return match.group(1) if match else None
     except Exception:
         return None
 
@@ -127,12 +125,9 @@ def resolve_agent_slug(sku: str) -> str | None:
             agent = get_agent_slug_from_sku(sku)
             if agent:
                 return agent
-        except Exception:
-            pass
-    agent = _resolve_with_table(sku)
-    if agent:
-        return agent
-    return _resolve_with_fallback(sku)
+        except Exception as ex_resolver:
+            log.warning("Resolver error: %s", ex_resolver)
+    return _resolve_with_table(sku) or _resolve_with_fallback(sku)
 
 def resolve_tier_code(sku: str) -> str | None:
     s = (sku or "").strip().lower()
@@ -145,17 +140,19 @@ def resolve_tier_code(sku: str) -> str | None:
 def _db():
     try:
         return importlib.import_module("app.db")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB module not available: {e}")
+    except ImportError as ex_import:
+        raise HTTPException(status_code=500, detail=f"DB module not available: {ex_import}")
+    except Exception as ex_generic:
+        raise HTTPException(status_code=500, detail=f"DB module error: {ex_generic}")
 
-# ======================
+# ----------------------
 # Routes
-# ======================
+# ----------------------
 @app.get("/")
 async def root():
     return {
         "name": "Thanyaaura Gateway",
-        "version": app.version,
+        "version": getattr(app, "version", None),
         "docs": "/docs",
         "endpoints_hint": ["/health", "/routes", "/debug/*", "/billing/thrivecart"],
     }
@@ -166,7 +163,7 @@ async def health():
 
 @app.get("/routes")
 async def routes():
-    return [r.path for r in app.routes]
+    return [r.path for r in app.routes if isinstance(r, APIRoute)]
 
 @app.get("/debug/resolve")
 async def debug_resolve(sku: str):
@@ -179,11 +176,8 @@ async def debug_resolve(sku: str):
 @app.get("/debug/sku-keys")
 async def debug_sku_keys():
     keys = set()
-    try:
-        if isinstance(AGENT_SKU_TO_AGENT, dict):
-            keys.update(list(AGENT_SKU_TO_AGENT.keys()))
-    except Exception:
-        pass
+    if isinstance(AGENT_SKU_TO_AGENT, dict):
+        keys.update(list(AGENT_SKU_TO_AGENT.keys()))
     keys.update(FALLBACK_SKU_TO_AGENT.keys())
     keys.update(TIER_SKU_TO_CODE.keys())
     return sorted(keys)
@@ -201,8 +195,8 @@ async def debug_agents_state():
             "keys_count": len(table) if isinstance(table, dict) else 0,
             "keys_sample": sample,
         }
-    except Exception as e:
-        return {"loaded": False, "error": str(e)}
+    except Exception as ex_agents:
+        return {"loaded": False, "error": str(ex_agents)}
 
 @app.get("/debug/db-ping")
 async def debug_db_ping():
@@ -210,8 +204,8 @@ async def debug_db_ping():
         dbmod = _db()
         info = await run_in_threadpool(dbmod.ping_db)
         return info
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception as ex_dbping:
+        return {"ok": False, "error": str(ex_dbping)}
 
 # ---- payload reader ----
 async def read_payload(request: Request) -> dict:
@@ -220,20 +214,19 @@ async def read_payload(request: Request) -> dict:
         try:
             raw = await request.body()
             return json.loads(raw.decode("utf-8") or "{}")
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
-    form = await request.form()
-    return dict(form)
+        except JSONDecodeError as e_json:
+            raise HTTPException(status_code=400, detail="Invalid JSON body") from e_json
+        except Exception as ex_json:
+            raise HTTPException(status_code=400, detail="Invalid JSON body") from ex_json
+    try:
+        form = await request.form()
+        return dict(form)
+    except Exception as ex_form:
+        log.warning("Form parse error: %s", ex_form)
+        return {}
 
 @app.post("/billing/thrivecart")
 async def billing_thrivecart(request: Request):
-    """
-    ThriveCart webhook endpoint
-    - Supports application/json & x-www-form-urlencoded
-    - Validates THRIVECART_SECRET (body/header/query)
-    - Classifies SKU as AGENT or TIER
-    - Upserts DB accordingly
-    """
     data = await read_payload(request)
 
     secret_in = (
@@ -267,8 +260,8 @@ async def billing_thrivecart(request: Request):
             await run_in_threadpool(dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code)
         else:
             await run_in_threadpool(dbmod.upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB error: {e}")
+    except Exception as ex_db:
+        raise HTTPException(status_code=500, detail=f"DB error: {ex_db}")
 
     return {
         "ok": True,
@@ -280,4 +273,3 @@ async def billing_thrivecart(request: Request):
         "order_id": order_id,
         "email": email,
     }
-
