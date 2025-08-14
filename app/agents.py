@@ -1,198 +1,87 @@
-# agents.py
-# Mappings for 33 agents (SKU <-> CODE <-> agent_slug)
-# NOTE:
-# - Keep 'CFP' (NOT 'CFR') for PROJECT_CF_AI_AGENT as requested.
+# agents.py — generated from Excel (Sheet1) to align SKUs precisely
+# Do not edit by hand; regenerate from spreadsheet if SKUs change.
 
-AGENT_SPECS = {
-    "CFS":   {"name": "CFS",   "providers": ["openai", "gemini"], "endpoint": "https://ai-finance-api-3.onrender.com", "github": "https://github.com/thanya-aura/ai-finance-api"},
-    "CFP":   {"name": "CFP",   "providers": ["openai", "gemini"], "endpoint": "https://ai-finance-api-3.onrender.com", "github": "https://github.com/thanya-aura/ai-finance-api"},
-    "CFPR":  {"name": "CFPR",  "providers": ["openai", "gemini"], "endpoint": "https://ai-finance-api-3.onrender.com", "github": "https://github.com/thanya-aura/ai-finance-api"},
-
-    "REVS":  {"name": "REVS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-revenue-api.onrender.com",   "github": "https://github.com/thanya-aura/ai_revenue_api"},
-    "REVP":  {"name": "REVP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-revenue-api.onrender.com",   "github": "https://github.com/thanya-aura/ai_revenue_api"},
-    "REVPR": {"name": "REVPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-revenue-api.onrender.com",   "github": "https://github.com/thanya-aura/ai_revenue_api"},
-
-    "CAPEXS":  {"name": "CAPEXS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-capex-api.onrender.com", "github": "https://github.com/thanya-aura/ai-capex-api.git"},
-    "CAPEXP":  {"name": "CAPEXP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-capex-api.onrender.com", "github": "https://github.com/thanya-aura/ai-capex-api.git"},
-    "CAPEXPR": {"name": "CAPEXPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-capex-api.onrender.com", "github": "https://github.com/thanya-aura/ai-capex-api.git"},
-
-    "FXS":  {"name": "FXS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-fx-api.onrender.com", "github": "https://github.com/thanya-aura/ai-fx-api.git"},
-    "FXP":  {"name": "FXP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-fx-api.onrender.com", "github": "https://github.com/thanya-aura/ai-fx-api.git"},
-    "FXPR": {"name": "FXPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-fx-api.onrender.com", "github": "https://github.com/thanya-aura/ai-fx-api.git"},
-
-    "COSTS":  {"name": "COSTS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-cost-api.onrender.com", "github": "https://github.com/thanya-aura/ai-cost-api.git"},
-    "COSTP":  {"name": "COSTP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-cost-api.onrender.com", "github": "https://github.com/thanya-aura/ai-cost-api.git"},
-    "COSTPR": {"name": "COSTPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-cost-api.onrender.com", "github": "https://github.com/thanya-aura/ai-cost-api.git"},
-
-    "BUDS":  {"name": "BUDS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-budget-api.onrender.com", "github": "https://github.com/thanya-aura/ai-budget-api.git"},
-    "BUDP":  {"name": "BUDP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-budget-api.onrender.com", "github": "https://github.com/thanya-aura/ai-budget-api.git"},
-    "BUDPR": {"name": "BUDPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-budget-api.onrender.com", "github": "https://github.com/thanya-aura/ai-budget-api.git"},
-
-    "REPS":  {"name": "REPS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-report-api.onrender.com", "github": "https://github.com/thanya-aura/ai-report-api.git"},
-    "REPP":  {"name": "REPP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-report-api.onrender.com", "github": "https://github.com/thanya-aura/ai-report-api.git"},
-    "REPPR": {"name": "REPPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-report-api.onrender.com", "github": "https://github.com/thanya-aura/ai-report-api.git"},
-
-    "VARS":  {"name": "VARS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-variance-api.onrender.com", "github": "https://github.com/thanya-aura/ai-variance-api.git"},
-    "VARP":  {"name": "VARP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-variance-api.onrender.com", "github": "https://github.com/thanya-aura/ai-variance-api.git"},
-    "VARPR": {"name": "VARPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-variance-api.onrender.com", "github": "https://github.com/thanya-aura/ai-variance-api.git"},
-
-    "MARS":  {"name": "MARS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-margin-api.onrender.com", "github": "https://github.com/thanya-aura/ai-margin-api.git"},
-    "MARP":  {"name": "MARP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-margin-api.onrender.com", "github": "https://github.com/thanya-aura/ai-margin-api.git"},
-    "MARPR": {"name": "MARPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-margin-api.onrender.com", "github": "https://github.com/thanya-aura/ai-margin-api.git"},
-
-    "FORS":  {"name": "FORS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-forecast-api.onrender.com", "github": "https://github.com/thanya-aura/ai-forecast-api.git"},
-    "FORP":  {"name": "FORP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-forecast-api.onrender.com", "github": "https://github.com/thanya-aura/ai-forecast-api.git"},
-    "FORPR": {"name": "FORPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-forecast-api.onrender.com", "github": "https://github.com/thanya-aura/ai-forecast-api.git"},
-
-    "DECS":  {"name": "DECS",  "providers": ["openai", "gemini"], "endpoint": "https://ai-decision-api.onrender.com", "github": "https://github.com/thanya-aura/ai-decision-api.git"},
-    "DECP":  {"name": "DECP",  "providers": ["openai", "gemini"], "endpoint": "https://ai-decision-api.onrender.com", "github": "https://github.com/thanya-aura/ai-decision-api.git"},
-    "DECPR": {"name": "DECPR", "providers": ["openai", "gemini"], "endpoint": "https://ai-decision-api.onrender.com", "github": "https://github.com/thanya-aura/ai-decision-api.git"},
+# Canonical mapping (SKU without 'module-0-') and aliases -> agent_slug
+AGENT_SKU_TO_AGENT = {
+  "budp": "BUDGET_PLUS",
+  "budpr": "BUDGET_PREMIUM",
+  "buds": "BUDGET_STANDARD",
+  "capexp": "CAPEX_PLUS",
+  "capexpr": "CAPEX_PREMIUM",
+  "capexs": "CAPEX_STANDARD",
+  "cfp": "PROJECT_CF_AI_AGENT",
+  "cfpr": "ENTERPRISE_CF_AI_AGENT",
+  "cfs": "SINGLE_CF_AI_AGENT",
+  "costp": "COST_PLUS",
+  "costpr": "COST_PREMIUM",
+  "costs": "COST_STANDARD",
+  "decp": "DECISION_PLUS",
+  "decpr": "DECISION_PREMIUM",
+  "decs": "DECISION_STANDARD",
+  "enterprise_cf": "ENTERPRISE_CF_AI_AGENT",
+  "forp": "FORECAST_PLUS",
+  "forpr": "FORECAST_PREMIUM",
+  "fors": "FORECAST_STANDARD",
+  "fxp": "FX_PLUS",
+  "fxpr": "FX_PREMIUM",
+  "fxs": "FX_STANDARD",
+  "marp": "MARGIN_PLUS",
+  "marpr": "MARGIN_PREMIUM",
+  "mars": "MARGIN_STANDARD",
+  "module-0-budp": "BUDGET_PLUS",
+  "module-0-budpr": "BUDGET_PREMIUM",
+  "module-0-buds": "BUDGET_STANDARD",
+  "module-0-capexp": "CAPEX_PLUS",
+  "module-0-capexpr": "CAPEX_PREMIUM",
+  "module-0-capexs": "CAPEX_STANDARD",
+  "module-0-cfp": "PROJECT_CF_AI_AGENT",
+  "module-0-cfpr": "ENTERPRISE_CF_AI_AGENT",
+  "module-0-cfs": "SINGLE_CF_AI_AGENT",
+  "module-0-costp": "COST_PLUS",
+  "module-0-costpr": "COST_PREMIUM",
+  "module-0-costs": "COST_STANDARD",
+  "module-0-decp": "DECISION_PLUS",
+  "module-0-decpr": "DECISION_PREMIUM",
+  "module-0-decs": "DECISION_STANDARD",
+  "module-0-forp": "FORECAST_PLUS",
+  "module-0-forpr": "FORECAST_PREMIUM",
+  "module-0-fors": "FORECAST_STANDARD",
+  "module-0-fxp": "FX_PLUS",
+  "module-0-fxpr": "FX_PREMIUM",
+  "module-0-fxs": "FX_STANDARD",
+  "module-0-marp": "MARGIN_PLUS",
+  "module-0-marpr": "MARGIN_PREMIUM",
+  "module-0-mars": "MARGIN_STANDARD",
+  "module-0-repp": "REPORT_PLUS",
+  "module-0-reppr": "REPORT_PREMIUM",
+  "module-0-reps": "REPORT_STANDARD",
+  "module-0-revp": "REVENUE_INTERMEDIATE",
+  "module-0-revpr": "REVENUE_ADVANCE",
+  "module-0-revs": "REVENUE_STANDARD",
+  "module-0-varp": "VARIANCE_PLUS",
+  "module-0-varpr": "VARIANCE_PREMIUM",
+  "module-0-vars": "VARIANCE_STANDARD",
+  "project_cf": "PROJECT_CF_AI_AGENT",
+  "single_cf": "SINGLE_CF_AI_AGENT",
+  "module-0-single_cf": "SINGLE_CF_AI_AGENT",
+  "repp": "REPORT_PLUS",
+  "reppr": "REPORT_PREMIUM",
+  "reps": "REPORT_STANDARD",
+  "revp": "REVENUE_INTERMEDIATE",
+  "revpr": "REVENUE_ADVANCE",
+  "revs": "REVENUE_STANDARD",
+  "varp": "VARIANCE_PLUS",
+  "varpr": "VARIANCE_PREMIUM",
+  "vars": "VARIANCE_STANDARD"
 }
 
-# 1) SKU -> CODE (33)
-AGENT_SKU_TO_CODE = {
-    "module-0-cfs":    "CFS",
-    "module-0-cfr":    "CFP",   # keep CFP (not CFR)
-    "module-0-cfpr":   "CFPR",
-
-    "module-0-revs":   "REVS",
-    "module-0-revp":   "REVP",
-    "module-0-revpr":  "REVPR",
-
-    "module-0-capexs": "CAPEXS",
-    "module-0-capexp": "CAPEXP",
-    "module-0-capexpr":"CAPEXPR",
-
-    "module-0-fxs":    "FXS",
-    "module-0-fxp":    "FXP",
-    "module-0-fxpr":   "FXPR",
-
-    "module-0-costs":  "COSTS",
-    "module-0-costp":  "COSTP",
-    "module-0-costpr": "COSTPR",
-
-    "module-0-buds":   "BUDS",
-    "module-0-budp":   "BUDP",
-    "module-0-budpr":  "BUDPR",
-
-    "module-0-reps":   "REPS",
-    "module-0-repp":   "REPP",
-    "module-0-reppr":  "REPPR",
-
-    "module-0-vars":   "VARS",
-    "module-0-varp":   "VARP",
-    "module-0-varpr":  "VARPR",
-
-    "module-0-mars":   "MARS",
-    "module-0-marp":   "MARP",
-    "module-0-marpr":  "MARPR",
-
-    "module-0-fors":   "FORS",
-    "module-0-forp":   "FORP",
-    "module-0-forpr":  "FORPR",
-
-    "module-0-decs":   "DECS",
-    "module-0-decp":   "DECP",
-    "module-0-decpr":  "DECPR",
-}
-
-# 2) agent_slug -> CODE
-AGENT_SLUG_TO_CODE = {
-    "SINGLE_CF_AI_AGENT":       "CFS",
-    "PROJECT_CF_AI_AGENT":      "CFP",     # CFP
-    "ENTERPRISE_CF_AI_AGENT":   "CFPR",
-
-    "REVENUE_STANDARD":         "REVS",
-    "REVENUE_INTERMEDIATE":     "REVP",
-    "REVENUE_ADVANCE":          "REVPR",
-
-    "CAPEX_STANDARD":           "CAPEXS",
-    "CAPEX_PLUS":               "CAPEXP",
-    "CAPEX_PREMIUM":            "CAPEXPR",
-
-    "FX_STANDARD":              "FXS",
-    "FX_PLUS":                  "FXP",
-    "FX_PREMIUM":               "FXPR",
-
-    "COST_STANDARD":            "COSTS",
-    "COST_PLUS":                "COSTP",
-    "COST_PREMIUM":             "COSTPR",
-
-    "BUDGET_STANDARD":          "BUDS",
-    "BUDGET_PLUS":              "BUDP",
-    "BUDGET_PREMIUM":           "BUDPR",
-
-    "REPORT_STANDARD":          "REPS",
-    "REPORT_PLUS":             "REPP",
-    "REPORT_PREMIUM":          "REPPR",
-
-    "VARIANCE_STANDARD":        "VARS",
-    "VARIANCE_PLUS":            "VARP",
-    "VARIANCE_PREMIUM":         "VARPR",
-
-    "MARGIN_STANDARD":          "MARS",
-    "MARGIN_PLUS":              "MARP",
-    "MARGIN_PREMIUM":           "MARPR",
-
-    "FORECAST_STANDARD":        "FORS",
-    "FORECAST_PLUS":            "FORP",
-    "FORECAST_PREMIUM":         "FORPR",
-
-    "DECISION_STANDARD":        "DECS",
-    "DECISION_PLUS":            "DECP",
-    "DECISION_PREMIUM":         "DECPR",
-}
-
-# 3) CODE -> agent_slug
-AGENT_CODE_TO_SLUG = {
-    "CFS":   "SINGLE_CF_AI_AGENT",
-    "CFP":   "PROJECT_CF_AI_AGENT",   # CFP
-    "CFPR":  "ENTERPRISE_CF_AI_AGENT",
-
-    "REVS":  "REVENUE_STANDARD",
-    "REVP":  "REVENUE_INTERMEDIATE",
-    "REVPR": "REVENUE_ADVANCE",
-
-    "CAPEXS":  "CAPEX_STANDARD",
-    "CAPEXP":  "CAPEX_PLUS",
-    "CAPEXPR": "CAPEX_PREMIUM",
-
-    "FXS":   "FX_STANDARD",
-    "FXP":   "FX_PLUS",
-    "FXPR":  "FX_PREMIUM",
-
-    "COSTS":  "COST_STANDARD",
-    "COSTP":  "COST_PLUS",
-    "COSTPR": "COST_PREMIUM",
-
-    "BUDS":  "BUDGET_STANDARD",
-    "BUDP":  "BUDGET_PLUS",
-    "BUDPR": "BUDGET_PREMIUM",
-
-    "REPS":  "REPORT_STANDARD",
-    "REPP":  "REPORT_PLUS",
-    "REPPR": "REPORT_PREMIUM",
-
-    "VARS":  "VARIANCE_STANDARD",
-    "VARP":  "VARIANCE_PLUS",
-    "VARPR": "VARIANCE_PREMIUM",
-
-    "MARS":  "MARGIN_STANDARD",
-    "MARP":  "MARGIN_PLUS",
-    "MARPR": "MARGIN_PREMIUM",
-
-    "FORS":  "FORECAST_STANDARD",
-    "FORP":  "FORECAST_PLUS",
-    "FORPR": "FORECAST_PREMIUM",
-
-    "DECS":  "DECISION_STANDARD",
-    "DECP":  "DECISION_PLUS",
-    "DECPR": "DECISION_PREMIUM",
-}
-
-__all__ = [
-    "AGENT_SPECS",
-    "AGENT_SKU_TO_CODE",
-    "AGENT_SLUG_TO_CODE",
-    "AGENT_CODE_TO_SLUG",
-]
+def get_agent_slug_from_sku(sku: str):
+    """
+    Normalize SKU (lower/strip). Accepts both 'cfp' and 'module-0-cfp', etc.
+    Returns agent_slug (e.g., 'PROJECT_CF_AI_AGENT') or None if unknown.
+    """
+    if not sku:
+        return None
+    s = str(sku).strip().lower()
+    # Direct lookup (aliases dictionary already contains 'module-0-' variants too)
+    return AGENT_SKU_TO_AGENT.get(s) or AGENT_SKU_TO_AGENT.get(s.removeprefix('module-0-'))
