@@ -13,19 +13,103 @@ except Exception:
     get_agent_slug_from_sku = None
     AGENT_SKU_TO_AGENT = {}
 
-# --- minimal fallback (covers cashflow family + common aliases) ---
-FALLBACK_SKU_TO_AGENT = {
-    # canonical
-    "cfs": "SINGLE_CF_AI_AGENT",
-    "cfp": "PROJECT_CF_AI_AGENT",
-    "cfpr": "ENTERPRISE_CF_AI_AGENT",
-    # aliases
-    "module-0-cfs": "SINGLE_CF_AI_AGENT",
-    "module-0-cfp": "PROJECT_CF_AI_AGENT",
-    "module-0-cfpr": "ENTERPRISE_CF_AI_AGENT",
-    "project_cf": "PROJECT_CF_AI_AGENT",
+# --- full fallback covering all 33 agents (short & long names + module-0- prefix) ---
+
+_BASE_FALLBACK = {
+    # Cashflow (3)
+    "cfs":   "SINGLE_CF_AI_AGENT",
+    "cfp":   "PROJECT_CF_AI_AGENT",
+    "cfpr":  "ENTERPRISE_CF_AI_AGENT",
+    "single_cf":   "SINGLE_CF_AI_AGENT",
+    "project_cf":    "PROJECT_CF_AI_AGENT",
     "enterprise_cf": "ENTERPRISE_CF_AI_AGENT",
+
+    # Revenue (3)
+    "revs":  "REVENUE_STANDARD",
+    "revp":  "REVENUE_INTERMEDIATE",
+    "revpr": "REVENUE_ADVANCE",
+    "revenue_standard":     "REVENUE_STANDARD",
+    "revenue_intermediate": "REVENUE_INTERMEDIATE",
+    "revenue_advance":      "REVENUE_ADVANCE",
+
+    # CAPEX (3)
+    "capexs":  "CAPEX_STANDARD",
+    "capexp":  "CAPEX_PLUS",
+    "capexpr": "CAPEX_PREMIUM",
+    "capex_standard": "CAPEX_STANDARD",
+    "capex_plus":     "CAPEX_PLUS",
+    "capex_premium":  "CAPEX_PREMIUM",
+
+    # FX (3)
+    "fxs":  "FX_STANDARD",
+    "fxp":  "FX_PLUS",
+    "fxpr": "FX_PREMIUM",
+    "fx_standard": "FX_STANDARD",
+    "fx_plus":     "FX_PLUS",
+    "fx_premium":  "FX_PREMIUM",
+
+    # COST (3)
+    "costs":  "COST_STANDARD",
+    "costp":  "COST_PLUS",
+    "costpr": "COST_PREMIUM",
+    "cost_standard": "COST_STANDARD",
+    "cost_plus":     "COST_PLUS",
+    "cost_premium":  "COST_PREMIUM",
+
+    # BUDGET (3)
+    "buds":  "BUDGET_STANDARD",
+    "budp":  "BUDGET_PLUS",
+    "budpr": "BUDGET_PREMIUM",
+    "budget_standard": "BUDGET_STANDARD",
+    "budget_plus":     "BUDGET_PLUS",
+    "budget_premium":  "BUDGET_PREMIUM",
+
+    # REPORT (3)
+    "reps":  "REPORT_STANDARD",
+    "repp":  "REPORT_PLUS",
+    "reppr": "REPORT_PREMIUM",
+    "report_standard": "REPORT_STANDARD",
+    "report_plus":     "REPORT_PLUS",
+    "report_premium":  "REPORT_PREMIUM",
+
+    # VARIANCE (3)
+    "vars":  "VARIANCE_STANDARD",
+    "varp":  "VARIANCE_PLUS",
+    "varpr": "VARIANCE_PREMIUM",
+    "variance_standard": "VARIANCE_STANDARD",
+    "variance_plus":     "VARIANCE_PLUS",
+    "variance_premium":  "VARIANCE_PREMIUM",
+
+    # MARGIN (3)
+    "mars":  "MARGIN_STANDARD",
+    "marp":  "MARGIN_PLUS",
+    "marpr": "MARGIN_PREMIUM",
+    "margin_standard": "MARGIN_STANDARD",
+    "margin_plus":     "MARGIN_PLUS",
+    "margin_premium":  "MARGIN_PREMIUM",
+
+    # FORECAST (3)
+    "fors":  "FORECAST_STANDARD",
+    "forp":  "FORECAST_PLUS",
+    "forpr": "FORECAST_PREMIUM",
+    "forecast_standard": "FORECAST_STANDARD",
+    "forecast_plus":     "FORECAST_PLUS",
+    "forecast_premium":  "FORECAST_PREMIUM",
+
+    # DECISION (3)
+    "decs":  "DECISION_STANDARD",
+    "decp":  "DECISION_PLUS",
+    "decpr": "DECISION_PREMIUM",
+    "decision_standard": "DECISION_STANDARD",
+    "decision_plus":     "DECISION_PLUS",
+    "decision_premium":  "DECISION_PREMIUM",
 }
+
+# auto-add module-0- prefixed variants
+FALLBACK_SKU_TO_AGENT = dict(_BASE_FALLBACK)
+for k, v in list(_BASE_FALLBACK.items()):
+    FALLBACK_SKU_TO_AGENT[f"module-0-{k}"] = v
+
 
 app = FastAPI(title="Thanyaaura Gateway", version="1.1.0")
 
