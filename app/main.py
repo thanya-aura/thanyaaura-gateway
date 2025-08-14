@@ -1,4 +1,4 @@
-# app/main.py — Gateway app: agent & tier resolver + DB upsert + debug endpoints
+## app/main.py — Gateway app: agent & tier resolver + DB upsert + cancel/refund + debug endpoints
 
 import os
 import re
@@ -85,7 +85,7 @@ TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
     TIER_SKU_TO_CODE[f"module-0-{k}"] = v
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.4.1")
+app = FastAPI(title="Thanyaaura Gateway", version="1.5.0")
 
 # ======================
 # Helpers: SKU extraction
@@ -166,6 +166,10 @@ def _db():
 # ==============
 # Endpoints
 # ==============
+@app.get("/")
+async def root():
+    return {"app": "Thanyaaura Gateway", "version": app.version if hasattr(app, "version") else "1.x"}
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -211,6 +215,15 @@ async def debug_agents_state():
     except Exception as e:
         return {"loaded": False, "error": str(e)}
 
+@app.get("/debug/db-ping")
+async def debug_db_ping():
+    try:
+        dbmod = _db()
+        info = await run_in_threadpool(dbmod.ping_db)
+        return info
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 # ---- payload reader (bottom for clarity) ----
 async def read_payload(request: Request) -> dict:
     ctype = (request.headers.get("content-type") or "").lower()
@@ -229,6 +242,7 @@ async def billing_thrivecart(request: Request):
     ThriveCart webhook endpoint
     - Supports application/json & x-www-form-urlencoded
     - Validates THRIVECART_SECRET (body/header/query)
+    - Handles order.success / order.refund / order.subscription.canceled
     - Classifies SKU as AGENT or TIER
     - Upserts DB accordingly
     """
@@ -238,28 +252,55 @@ async def billing_thrivecart(request: Request):
     secret_in = (
         data.get("thrivecart_secret")
         or request.headers.get("X-THRIVECART-SECRET")
-        or request.query_params.get("thrivecart_secret")  # allow query param
+        or request.query_params.get("thrivecart_secret")
     )
     secret_env = os.environ.get("THRIVECART_SECRET")
     if not secret_in or not secret_env or secret_in != secret_env:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # --- Resolve SKU classification ---
+    event = (data.get("event") or "").strip()
+    order_id = data.get("order_id") or data.get("invoice_id")
+    email = data.get("customer[email]") or data.get("email")
+
+    if not order_id:
+        raise HTTPException(status_code=400, detail="Missing order_id")
+    if event in {"order.success", "order.payment", ""} and not email:
+        # เฉพาะตอนเปิดสิทธิ์เราจำเป็นต้องรู้ email
+        raise HTTPException(status_code=400, detail="Missing customer[email]")
+
+    short_sku = None
+    tier_code = None
+    agent_slug = None
+
+    # สำหรับ event ยกเลิก/คืนเงิน ส่วนมากไม่ส่ง fulfillment ดังนั้นไม่ต้อง resolve SKU ก็ได้
+    if event in {"order.refund", "order.subscription.canceled"}:
+        # mark subscription canceled; ถ้ามีฟังก์ชันลบ entitlement ก็เรียกเพิ่ม
+        dbmod = _db()
+        try:
+            if hasattr(dbmod, "mark_subscription_canceled"):
+                await run_in_threadpool(dbmod.mark_subscription_canceled, order_id)
+            if hasattr(dbmod, "remove_entitlements_by_subscription"):
+                await run_in_threadpool(dbmod.remove_entitlements_by_subscription, order_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"DB error (cancel): {e}")
+
+        return {
+            "ok": True,
+            "event": event,
+            "order_id": order_id,
+            "status": "canceled",
+        }
+
+    # ---- ปกติ: เปิดสิทธิ์ (order.success / order.payment) ----
     sku = derive_sku(data)
     if not sku:
         raise HTTPException(status_code=400, detail="Missing SKU (or fulfillment[url])")
-
-    tier_code = resolve_tier_code(sku)
-    agent_slug = None if tier_code else resolve_agent_slug(sku)
-    if not tier_code and not agent_slug:
-        raise HTTPException(status_code=400, detail=f"Unknown SKU: {sku}")
-
-    order_id = data.get("order_id") or data.get("invoice_id")
-    email = data.get("customer[email]") or data.get("email")
-    if not order_id or not email:
-        raise HTTPException(status_code=400, detail="Missing order_id or customer[email]")
-
     short_sku = _drop_module0(sku)
+
+    tier_code = resolve_tier_code(short_sku)
+    agent_slug = None if tier_code else resolve_agent_slug(short_sku)
+    if not tier_code and not agent_slug:
+        raise HTTPException(status_code=400, detail=f"Unknown SKU: {short_sku}")
 
     # --- Upsert to DB (run sync in threadpool) ---
     dbmod = _db()
@@ -272,12 +313,14 @@ async def billing_thrivecart(request: Request):
         # โยน 500 พร้อมข้อความจาก DB (ช่วงดีบั๊ก)
         raise HTTPException(status_code=500, detail=f"DB error: {e}")
 
-@app.get("/debug/db-ping")
-async def debug_db_ping():
-    try:
-        dbmod = _db()
-        info = await run_in_threadpool(dbmod.ping_db)
-        # ซ่อนรหัสผ่านใน URL ถ้าจะส่งกลับ (ไม่จำเป็นก็ไม่ต้องคืน)
-        return info
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    # ---- สำเร็จ: คืน payload ปิดท้าย ----
+    return {
+        "ok": True,
+        "event": event or "order.success",
+        "order_id": order_id,
+        "email": email,
+        "sku": short_sku,
+        "type": "TIER" if tier_code else "AGENT",
+        "tier_code": tier_code,
+        "agent_slug": agent_slug,
+    }
