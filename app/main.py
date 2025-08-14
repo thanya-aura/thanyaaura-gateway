@@ -3,6 +3,7 @@
 import os
 import re
 import json
+import importlib
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,7 +16,7 @@ except Exception:  # pragma: no cover
     get_agent_slug_from_sku = None
     AGENT_SKU_TO_AGENT = {}
 
-# ===== FULL FALLBACK (33 agents) as before =====
+# ===== FULL FALLBACK (33 agents) =====
 _BASE_FALLBACK = {
     # Cashflow (3) + aliases
     "cfs": "SINGLE_CF_AI_AGENT",
@@ -69,7 +70,7 @@ FALLBACK_SKU_TO_AGENT = dict(_BASE_FALLBACK)
 for k, v in list(_BASE_FALLBACK.items()):
     FALLBACK_SKU_TO_AGENT[f"module-0-{k}"] = v
 
-# ===== NEW: Tier SKUs (aliases accepted) =====
+# ===== Tier SKUs (aliases accepted) =====
 # canonical codes we store in DB: STANDARD / PLUS / PREMIUM
 _BASE_TIER = {
     "standard": "STANDARD",
@@ -84,7 +85,7 @@ TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
     TIER_SKU_TO_CODE[f"module-0-{k}"] = v
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.4.0")
+app = FastAPI(title="Thanyaaura Gateway", version="1.4.1")
 
 # ======================
 # Helpers: SKU extraction
@@ -154,15 +155,13 @@ def resolve_tier_code(sku: str) -> str | None:
     )
 
 # =====================
-# DB helpers (import)
+# DB helpers (lazy import to avoid startup crash if db.py missing)
 # =====================
-import psycopg  # keep here for import errors to surface early
-
-from app.db import (
-    upsert_subscription_and_entitlement,  # agent products
-    upsert_tier_subscription,            # tier products
-    cancel_subscription,                 # optional
-)
+def _db():
+    try:
+        return importlib.import_module("app.db")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB module not available: {e}")
 
 # ==============
 # Endpoints
@@ -212,20 +211,35 @@ async def debug_agents_state():
     except Exception as e:
         return {"loaded": False, "error": str(e)}
 
+# ---- payload reader (bottom for clarity) ----
+async def read_payload(request: Request) -> dict:
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "application/json" in ctype:
+        try:
+            raw = await request.body()
+            return json.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+    form = await request.form()
+    return dict(form)
+
 @app.post("/billing/thrivecart")
 async def billing_thrivecart(request: Request):
     """
     ThriveCart webhook endpoint
     - Supports application/json & x-www-form-urlencoded
-    - Validates THRIVECART_SECRET
+    - Validates THRIVECART_SECRET (body/header/query)
     - Classifies SKU as AGENT or TIER
     - Upserts DB accordingly
     """
-    data = await (await request.body(), request.form())[1] if False else None  # silence pyright
-    data = await (lambda: read_payload(request))()
+    data = await read_payload(request)
 
     # --- Secret check (enable in production) ---
-    secret_in  = data.get("thrivecart_secret") or request.headers.get("X-THRIVECART-SECRET")
+    secret_in = (
+        data.get("thrivecart_secret")
+        or request.headers.get("X-THRIVECART-SECRET")
+        or request.query_params.get("thrivecart_secret")  # allow query param
+    )
     secret_env = os.environ.get("THRIVECART_SECRET")
     if not secret_in or not secret_env or secret_in != secret_env:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -248,10 +262,11 @@ async def billing_thrivecart(request: Request):
     short_sku = _drop_module0(sku)
 
     # --- Upsert to DB (run sync in threadpool) ---
+    dbmod = _db()
     if tier_code:
-        await run_in_threadpool(upsert_tier_subscription, order_id, email, short_sku, tier_code)
+        await run_in_threadpool(dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code)
     else:
-        await run_in_threadpool(upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug)
+        await run_in_threadpool(dbmod.upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug)
 
     return {
         "ok": True,
@@ -263,15 +278,3 @@ async def billing_thrivecart(request: Request):
         "order_id": order_id,
         "email": email,
     }
-
-# ---- payload reader (kept bottom for clarity) ----
-async def read_payload(request: Request) -> dict:
-    ctype = (request.headers.get("content-type") or "").lower()
-    if "application/json" in ctype:
-        try:
-            raw = await request.body()
-            return json.loads(raw.decode("utf-8") or "{}")
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
-    form = await request.form()
-    return dict(form)
