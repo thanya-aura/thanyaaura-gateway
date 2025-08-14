@@ -137,3 +137,13 @@ async def billing_thrivecart(request: Request):
         "order_id": data.get("order_id") or data.get("invoice_id"),
         "email": data.get("customer[email]") or data.get("email"),
     }
+
+@app.get("/debug/agents-state")
+async def debug_agents_state():
+    try:
+        from app import agents as _agents
+        keys = sorted(getattr(_agents, "AGENT_SKU_TO_AGENT", {}).keys())[:20]
+        has_func = callable(getattr(_agents, "get_agent_slug_from_sku", None))
+        return {"loaded": True, "has_func": has_func, "keys_sample": keys, "keys_count": len(getattr(_agents, "AGENT_SKU_TO_AGENT", {}))}
+    except Exception as e:
+        return {"loaded": False, "error": str(e)}
