@@ -263,18 +263,21 @@ async def billing_thrivecart(request: Request):
 
     # --- Upsert to DB (run sync in threadpool) ---
     dbmod = _db()
-    if tier_code:
-        await run_in_threadpool(dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code)
-    else:
-        await run_in_threadpool(dbmod.upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug)
+    try:
+        if tier_code:
+            await run_in_threadpool(dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code)
+        else:
+            await run_in_threadpool(dbmod.upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug)
+    except Exception as e:
+        # โยน 500 พร้อมข้อความจาก DB (ช่วงดีบั๊ก)
+        raise HTTPException(status_code=500, detail=f"DB error: {e}")
 
-    return {
-        "ok": True,
-        "sku": short_sku,
-        "type": "TIER" if tier_code else "AGENT",
-        "tier_code": tier_code,
-        "agent_slug": agent_slug,
-        "event": data.get("event"),
-        "order_id": order_id,
-        "email": email,
-    }
+@app.get("/debug/db-ping")
+async def debug_db_ping():
+    try:
+        dbmod = _db()
+        info = await run_in_threadpool(dbmod.ping_db)
+        # ซ่อนรหัสผ่านใน URL ถ้าจะส่งกลับ (ไม่จำเป็นก็ไม่ต้องคืน)
+        return info
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
