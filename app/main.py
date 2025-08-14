@@ -303,3 +303,12 @@ async def billing_thrivecart(request: Request):
         "order_id": order_id,
         "email": email,
     }
+
+# ใน app/main.py (ตรงหัวท้ายไฟล์ก็ได้)
+from fastapi import FastAPI
+
+app = FastAPI(title="Thanyaaura Gateway", version="1.4.1")
+
+@app.get("/")
+async def root():
+    return {"ok": True, "service": "thanyaaura-gateway", "health": "/health"}
