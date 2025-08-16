@@ -1,8 +1,20 @@
+<!DOCTYPE html>
 <html>
-  <body>
-    <h2>Hi {{ first_name }},</h2>
-    <p>See how others succeed with Agent {{ agent_id }}.</p>
-    <p>Case studies and workflows are waiting for you.</p>
-    <a href="https://yourdomain.com/agents/{{ agent_id }}/trial">See Case Study</a>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <title>Case Study – {{agent_name}}</title>
+</head>
+<body>
+  <p>Hi {{first_name}},</p>
+  <p>On Day 10, here’s how real customers used <b>{{agent_name}}</b> to save time and deliver impact:</p>
+  <p>🎥 Watch the case study video: <a href="https://youtube.com/watch?v=case_study_day10">Click here</a></p>
+  <p>Try these prompts today:</p>
+  <ul>
+    <li>Summarize variance vs budget in 5 key points</li>
+    <li>Generate a quarterly revenue vs plan chart</li>
+    <li>Highlight 3 early warning risks from cashflow trends</li>
+    <li>Write a 200-word executive summary for CFO</li>
+  </ul>
+  <p><a href="{{gpt_link}}">👉 Open {{agent_name}} in GPT</a></p>
+</body>
 </html>

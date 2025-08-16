@@ -1,8 +1,21 @@
+<!DOCTYPE html>
 <html>
-  <body>
-    <h2>Hi {{ first_name }},</h2>
-    <p>Your free trial with Agent {{ agent_id }} ends soon!</p>
-    <p>Upgrade now to keep using all features of Tier {{ tier }}.</p>
-    <a href="https://yourdomain.com/agents/{{ agent_id }}/upgrade">Upgrade & Claim Bonus</a>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <title>Executive Insights – {{agent_name}}</title>
+</head>
+<body>
+  <p>Hi {{first_name}},</p>
+  <p>It’s Day 23 – let’s take a look at the big picture across your projects with <b>{{agent_name}}</b>.</p>
+  <p>🎥 Watch the executive insights video: <a href="https://youtube.com/watch?v=case_study_day23">Click here</a></p>
+  <p>Try these prompts today:</p>
+  <ul>
+    <li>Consolidate revenue data from all projects</li>
+    <li>Show YoY growth by region</li>
+    <li>Identify top 3 units with largest shortfalls vs target</li>
+    <li>Generate a 300-word executive summary of portfolio performance</li>
+  </ul>
+  <p><a href="{{gpt_link}}">👉 Open {{agent_name}} in GPT</a></p>
+  <p>Only a few days left in your trial – don’t miss out on upgrading!</p>
+</body>
 </html>
