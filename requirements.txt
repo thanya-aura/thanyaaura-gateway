@@ -8,3 +8,4 @@ python-multipart
 gunicorn
 psycopg[binary]
 starlette==0.47.2
+apscheduler==3.10.4
