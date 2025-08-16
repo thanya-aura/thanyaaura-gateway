@@ -6,6 +6,7 @@ python-dotenv
 asgiref
 python-multipart
 gunicorn
-psycopg[binary]
 starlette==0.47.2
 apscheduler==3.10.4
+psycopg[binary]
+jinja2==3.1.4

@@ -1,20 +1,13 @@
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-from app.utils.mailer import send_email
+from app.utils.mailer import send_email_html
 
-def job_check_membership():
-    subject = "⚠️ Membership Expiry Alert"
-    body = "Hello, your membership is about to expire. Please renew to continue service."
-    send_email(subject, body)
-
-def start_scheduler():
-    scheduler = BackgroundScheduler(timezone="Asia/Bangkok")
-    # ✅ Run once a day at 9:00 AM
-    scheduler.add_job(
-        job_check_membership,
-        trigger=CronTrigger(hour=9, minute=0)
+def job_send_trial_email(user):
+    context = {
+        "first_name": user.get("first_name", "User"),
+        "agent_id": user.get("agent_id", 1),
+    }
+    send_email_html(
+        subject="Welcome to Your Trial",
+        template_name="email_day1.html",
+        context=context,
+        receiver=user.get("email"),
     )
-    scheduler.start()
-
-if __name__ == "__main__":
-    start_scheduler()
