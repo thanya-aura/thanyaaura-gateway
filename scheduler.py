@@ -1,13 +1,19 @@
-from app.utils.mailer import send_email_html
+import logging
+import sys
+from apscheduler.schedulers.blocking import BlockingScheduler
 
-def job_send_trial_email(user):
-    context = {
-        "first_name": user.get("first_name", "User"),
-        "agent_id": user.get("agent_id", 1),
-    }
-    send_email_html(
-        subject="Welcome to Your Trial",
-        template_name="email_day1.html",
-        context=context,
-        receiver=user.get("email"),
-    )
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logging.info("Scheduler started...")
+
+scheduler = BlockingScheduler()
+
+# Example scheduled job every 1 minute
+@scheduler.scheduled_job('interval', minutes=1)
+def scheduled_task():
+    logging.info("Running scheduled task...")
+
+if __name__ == "__main__":
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Scheduler stopped.")
