@@ -1,2 +1,2 @@
-web: python -m app.main
-worker: python scheduler.py
+web: gunicorn app.main:app -k uvicorn.workers.UvicornWorker
+worker: python -m app.scheduler

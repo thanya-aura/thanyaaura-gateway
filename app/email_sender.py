@@ -1,3 +1,4 @@
+# app/email_sender.py
 import os
 import smtplib
 import unicodedata
@@ -6,19 +7,13 @@ from email.header import Header
 from email.utils import formataddr
 from jinja2 import Environment, FileSystemLoader
 
-# ---------------- Email config ----------------
-SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
-SMTP_USER = os.environ.get("SMTP_USER")
-SMTP_PASS = os.environ.get("SMTP_PASS")
-FROM_EMAIL = os.environ.get("FROM_EMAIL", "no-reply@thanyaaura.com")
-FROM_NAME = os.environ.get("FROM_NAME", "Thanyaaura")
-
 # ---------------- Jinja env ----------------
 env = Environment(loader=FileSystemLoader("app/templates"))
 
-# Keep your original “clean” filter logic
 def clean_text(value: str) -> str:
+    """
+    Legacy 'clean' filter: normalize common punctuation and NBSP.
+    """
     if not value:
         return ""
     return (
@@ -33,35 +28,57 @@ def clean_text(value: str) -> str:
 env.filters["clean"] = clean_text
 
 # ---------------- Helpers ----------------
-def _sanitize(text: str) -> str:
+NBSP = "\xa0"
+
+def _sanitize(text: str | None) -> str:
     """
     Normalize to NFKC and replace NBSP with normal spaces to avoid hidden Unicode issues.
     """
     if text is None:
         return ""
-    return unicodedata.normalize("NFKC", str(text)).replace("\xa0", " ")
+    return unicodedata.normalize("NFKC", str(text)).replace(NBSP, " ")
 
-def _ascii_credential(raw: str, name_for_log: str) -> str:
+def _ascii_credential(raw: str | None, name_for_log: str) -> str:
     """
-    Make credentials safe for SMTP ASCII login:
-    - normalize
-    - replace NBSP with space
-    - strip spaces (common in copy/paste)
-    - drop any remaining non-ASCII (and warn)
+    Ensure credentials/envelope addresses are ASCII (SMTP AUTH and envelope are ASCII on many servers).
+    We keep message content UTF-8; only creds/envelopes are constrained.
     """
-    if raw is None:
-        return ""
-    cleaned = _sanitize(raw).strip().replace(" ", "")
+    s = _sanitize(raw).strip()
     try:
-        cleaned.encode("ascii")
-        return cleaned
+        s.encode("ascii")
+        return s
     except UnicodeEncodeError:
-        # Drop non-ASCII chars (e.g., NBSP) and warn
-        ascii_only = "".join(ch for ch in cleaned if ord(ch) < 128)
-        print(f"[email_warn] {name_for_log} contained non-ASCII characters and was sanitized. "
-              f"Please fix this value in your environment variables.")
+        # Remove non-ASCII codepoints (e.g., NBSP, smart quotes)
+        ascii_only = "".join(ch for ch in s if ord(ch) < 128)
+        print(
+            f"[email_warn] {name_for_log} contained non-ASCII characters and was sanitized. "
+            "Retype this value in your environment (avoid copy/paste)."
+        )
         return ascii_only
 
+def _bool_env(name: str) -> bool:
+    return (_sanitize(os.getenv(name)) or "").lower() in {"1", "true", "yes", "on"}
+
+# ---------------- Email config ----------------
+# Accept both SMTP_SERVER and SMTP_HOST (HOST is common in some dashboards)
+SMTP_SERVER = _sanitize(os.getenv("SMTP_SERVER") or os.getenv("SMTP_HOST") or "smtp.gmail.com")
+try:
+    SMTP_PORT = int(_sanitize(os.getenv("SMTP_PORT") or "587"))
+except ValueError:
+    SMTP_PORT = 587
+
+# ASCII-only creds for SMTP AUTH
+SMTP_USER = _ascii_credential(os.getenv("SMTP_USER") or "", "SMTP_USER")
+SMTP_PASS = _ascii_credential(os.getenv("SMTP_PASS") or "", "SMTP_PASS")
+
+# Envelope From must be ASCII for many MTAs; use FROM_EMAIL if provided, else fallback to SMTP_USER
+FROM_EMAIL = _ascii_credential(os.getenv("FROM_EMAIL") or SMTP_USER or "no-reply@thanyaaura.com", "FROM_EMAIL")
+# Display name can be UTF-8
+FROM_NAME = _sanitize(os.getenv("FROM_NAME") or "Thanyaaura")
+
+DISABLE_EMAIL = _bool_env("DISABLE_EMAIL")
+
+# ---------------- Core ----------------
 def render_template(template_name: str, context: dict) -> str:
     tpl = env.get_template(template_name)
     html = tpl.render(**context)
@@ -69,45 +86,45 @@ def render_template(template_name: str, context: dict) -> str:
 
 def send_email(to_email: str, subject: str, html_content: str) -> bool:
     """
-    UTF-8 safe email sender:
-    - Subject encoded via Header('utf-8')
-    - From header uses formataddr with UTF-8 display name
-    - Body is UTF-8 HTML
-    - Credentials sanitized to ASCII for SMTP auth (Python uses ASCII in login)
+    UTF-8 safe sender:
+      - Subject & From display name encoded as UTF-8 headers
+      - HTML body in UTF-8
+      - SMTP credentials & envelope addresses sanitized to ASCII
     """
-    subject = _sanitize(subject)
-    from_name = _sanitize(FROM_NAME)
+    subject_str = _sanitize(subject)
+    html_str = _sanitize(html_content)
+    to_ascii = _ascii_credential(to_email, "TO_EMAIL")
 
-    # Build message (UTF-8 body & headers)
-    msg = MIMEText(_sanitize(html_content), "html", "utf-8")
-    msg["Subject"] = str(Header(subject, "utf-8"))
-    msg["From"] = formataddr((str(Header(from_name, "utf-8")), FROM_EMAIL))
-    msg["To"] = to_email
+    # Build message (UTF-8 content)
+    msg = MIMEText(html_str, "html", "utf-8")
+    msg["Subject"] = str(Header(subject_str, "utf-8"))
+    msg["From"] = formataddr((str(Header(FROM_NAME, "utf-8")), FROM_EMAIL))
+    msg["To"] = to_ascii
 
-    # If SMTP creds are not set, no-op (keeps worker green)
-    if not SMTP_USER or not SMTP_PASS:
-        print(f"[email_stub] Would send to {to_email}: {subject}")
+    # Dry-run switch (useful locally)
+    if DISABLE_EMAIL or not SMTP_USER or not SMTP_PASS:
+        print(f"[email_stub] Would send to {to_ascii}: {subject_str}")
         return True
-
-    # Sanitize credentials for ASCII-only SMTP auth
-    user = _ascii_credential(SMTP_USER, "SMTP_USER")
-    pw = _ascii_credential(SMTP_PASS, "SMTP_PASS")
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as server:
             server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(user, pw)  # Python encodes this as ASCII internally
-            server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
+            # TLS if supported
+            try:
+                server.starttls()
+                server.ehlo()
+            except smtplib.SMTPException:
+                pass
+            server.login(SMTP_USER, SMTP_PASS)  # Python encodes this as ASCII
+            server.sendmail(FROM_EMAIL, [to_ascii], msg.as_string())
         return True
     except UnicodeEncodeError as e:
-        # Don’t crash the worker; log and skip so the deploy stays live
-        print(f"[email_error] Non-ASCII in SMTP credentials caused login failure: {e}. "
-              f"Please retype SMTP_USER and SMTP_PASS in the dashboard (avoid copy-paste).")
+        print(
+            f"[email_error] Non-ASCII in SMTP credentials/envelope caused login failure: {e}. "
+            "Please retype SMTP_USER/SMTP_PASS/FROM_EMAIL in the dashboard (avoid copy/paste)."
+        )
         return False
     except Exception as e:
-        # Any SMTP error should not kill the process
         print(f"[email_error] SMTP send failed: {e}")
         return False
 

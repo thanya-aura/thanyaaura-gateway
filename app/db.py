@@ -1,13 +1,17 @@
+# app/db.py
 import os
 import psycopg
 from psycopg.rows import dict_row
 
-# Database connection helper
+# ---------- Connection ----------
 def _connect():
-    return psycopg.connect(os.environ.get("DB_URL"), row_factory=dict_row)
+    url = os.environ.get("DATABASE_URL") or os.environ.get("DB_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL/DB_URL is not set")
+    return psycopg.connect(url, row_factory=dict_row)
 
-# ---------- Utility ----------
-def _upsert(sql: str, params: tuple):
+# ---------- Helpers ----------
+def _upsert(sql: str, params: tuple) -> bool:
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
@@ -26,11 +30,20 @@ def ping_db():
     except Exception:
         return False
 
-# ---------- Subscriptions ----------
-def upsert_subscription_and_entitlement(user_email: str, sku: str, platform: str, status: str = "active"):
+# ---------- Subscriptions (align with main.py webhook) ----------
+def upsert_subscription_and_entitlement(
+    order_id: str,
+    user_email: str,
+    sku: str,
+    agent_slug: str | None,
+    platform: str,
+    status: str = "active",
+):
     """
-    Store subscription for a specific agent or 'all' entitlement.
+    Store subscription for a specific agent purchase.
+    ID is tied to order to avoid collision on repeat buys.
     """
+    sub_id = f"tc-agent-{order_id}-{sku}-{platform}".lower()
     sql = """
         INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
         VALUES (%s, %s, %s, %s, %s, now(), now())
@@ -39,13 +52,20 @@ def upsert_subscription_and_entitlement(user_email: str, sku: str, platform: str
                       status     = EXCLUDED.status,
                       updated_at = now();
     """
-    sub_id = f"tc-agent-{sku}-{platform}".lower()
     return _upsert(sql, (sub_id, user_email, sku, platform, status))
 
-def upsert_tier_subscription(user_email: str, sku: str, tier: str, platform: str, status: str = "active"):
+def upsert_tier_subscription(
+    order_id: str,
+    user_email: str,
+    sku: str,
+    tier: str,
+    platform: str,
+    status: str = "active",
+):
     """
-    Store subscription for a tier plan (Standard / Plus / Premium).
+    Store subscription for tier plans (Standard / Plus / Premium).
     """
+    sub_id = f"tc-tier-{order_id}-{tier}-{platform}".lower()
     sql = """
         INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
         VALUES (%s, %s, %s, %s, %s, now(), now())
@@ -54,13 +74,21 @@ def upsert_tier_subscription(user_email: str, sku: str, tier: str, platform: str
                       status     = EXCLUDED.status,
                       updated_at = now();
     """
-    sub_id = f"tc-tier-{tier}-{platform}".lower()
     return _upsert(sql, (sub_id, user_email, sku, platform, status))
 
-def upsert_enterprise_license(user_email: str, sku: str, license_type: str, platform: str, status: str = "active"):
+def upsert_enterprise_license(
+    order_id: str,
+    user_email: str,
+    sku: str,                 # e.g., en_standard, en_professional, en_unlimited
+    agent_slug: str | None,   # not used here; kept for signature parity
+    platform: str,
+    status: str = "active",
+):
     """
-    Store Copilot enterprise license (en_standard, en_professional, en_unlimited).
+    Store Copilot enterprise license (en_standard / en_professional / en_unlimited).
     """
+    license_type = (sku or "").lower()
+    sub_id = f"tc-enterprise-{order_id}-{license_type}-{platform}".lower()
     sql = """
         INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
         VALUES (%s, %s, %s, %s, %s, now(), now())
@@ -69,10 +97,9 @@ def upsert_enterprise_license(user_email: str, sku: str, license_type: str, plat
                       status     = EXCLUDED.status,
                       updated_at = now();
     """
-    sub_id = f"tc-enterprise-{license_type}-{platform}".lower()
     return _upsert(sql, (sub_id, user_email, sku, platform, status))
 
-def cancel_subscription(user_email: str, sku: str = None):
+def cancel_subscription(user_email: str, sku: str | None = None):
     """
     Cancel one or all subscriptions for a user.
     """
@@ -137,15 +164,16 @@ def fetch_effective_agents(user_email: str):
 # ---------- Trial Users ----------
 def get_trial_users_by_day(day_offset: int = 0):
     """
-    Return list of trial users that started exactly `day_offset` days ago.
-    Example: day_offset=0 -> today, 1 -> yesterday, etc.
+    Return list of trial users whose created_at falls on Thailand's (Asia/Bangkok) date
+    exactly `day_offset` days ago (0=today TH, 1=yesterday TH, etc.).
     """
     sql = """
         SELECT user_email, created_at, platform
           FROM subscriptions
          WHERE sku = 'trial'
            AND status = 'active'
-           AND DATE(created_at) = CURRENT_DATE - %s::int;
+           AND (created_at AT TIME ZONE 'Asia/Bangkok')::date =
+               (now() AT TIME ZONE 'Asia/Bangkok')::date - %s::int;
     """
     try:
         with _connect() as conn, conn.cursor() as cur:
@@ -189,4 +217,5 @@ __all__ = [
     "fetch_subscriptions",
     "fetch_effective_agents",
     "get_trial_users_by_day",
+    "ensure_permanent_admin_user",
 ]

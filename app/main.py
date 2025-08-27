@@ -1,4 +1,4 @@
-# main.py – extended for GPT + Gemini + Copilot (incl. enterprise SKUs, platform-aware)
+# main.py – extended for GPT + Gemini + Copilot (incl. enterprise SKUs, platform-aware, entitlements endpoints)
 
 import os
 import re
@@ -7,14 +7,20 @@ import importlib
 import logging
 from urllib.parse import urlparse
 from json import JSONDecodeError
+from typing import Optional, Dict, Any
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
+# ---------- logging ----------
 log = logging.getLogger("thanyaaura.gateway")
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
-# ===== Try import real resolver/table from agents.py =====
+# ---------- agents resolver (optional external table) ----------
 try:
     from app.agents import get_agent_slug_from_sku, AGENT_SKU_TO_AGENT  # noqa
     log.info("Loaded resolver from app.agents (keys=%s)", len(AGENT_SKU_TO_AGENT or {}))
@@ -27,7 +33,7 @@ except Exception as ex_generic:
     get_agent_slug_from_sku = None
     AGENT_SKU_TO_AGENT = {}
 
-# ===== FULL FALLBACK (33 base agents) =====
+# ---------- fallback agent SKU map (33 base agents + variants) ----------
 _BASE_FALLBACK = {
     # Cashflow (3) + aliases
     "cfs": "SINGLE_CF_AI_AGENT", "cfp": "PROJECT_CF_AI_AGENT", "cfpr": "ENTERPRISE_CF_AI_AGENT",
@@ -63,23 +69,20 @@ _BASE_FALLBACK = {
     "decs": "DECISION_STANDARD", "decp": "DECISION_PLUS", "decpr": "DECISION_PREMIUM",
     "decision_standard": "DECISION_STANDARD", "decision_plus": "DECISION_PLUS", "decision_premium": "DECISION_PREMIUM",
 }
-
-# Copy to fallback and extend
 FALLBACK_SKU_TO_AGENT = dict(_BASE_FALLBACK)
 for k, v in list(_BASE_FALLBACK.items()):
     FALLBACK_SKU_TO_AGENT[f"module-0-{k}"] = v
-    # Add Gemini and Copilot variants
     FALLBACK_SKU_TO_AGENT[f"{k}_gemini"] = v
     FALLBACK_SKU_TO_AGENT[f"{k}_ms"] = v
 
-# Add enterprise Copilot SKUs
+# Enterprise license SKUs (Copilot/Enterprise)
 FALLBACK_SKU_TO_AGENT.update({
     "en_standard": "ENTERPRISE_LICENSE_STANDARD",
     "en_professional": "ENTERPRISE_LICENSE_PRO",
     "en_unlimited": "ENTERPRISE_LICENSE_UNLIMITED",
 })
 
-# ===== Tier SKUs =====
+# ---------- tier SKUs (Standard/Plus/Premium) ----------
 _BASE_TIER = {
     "standard": "STANDARD", "plus": "PLUS", "premium": "PREMIUM",
     "tier_standard": "STANDARD", "tier_plus": "PLUS", "tier_premium": "PREMIUM",
@@ -88,7 +91,17 @@ TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
     TIER_SKU_TO_CODE[f"module-0-{k}"] = v
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.7.0")
+# ---------- entitlements APIs (individual + enterprise) ----------
+# Optional imports; if not present, endpoints will still work with fallbacks disabled.
+try:
+    from app import entitlements as ent_resolver
+    from app import enterprise as enterprise_api
+except Exception as e:
+    ent_resolver = None
+    enterprise_api = None
+    log.warning("Entitlements modules not loaded (%s). Entitlement endpoints will degrade gracefully.", e)
+
+app = FastAPI(title="Thanyaaura Gateway", version="1.8.0")
 
 # ----------------------
 # Helpers
@@ -97,7 +110,7 @@ def _drop_module0(s: str) -> str:
     s = (s or "").strip().lower()
     return s[9:] if s.startswith("module-0-") else s
 
-def derive_sku_from_url(url_str: str | None) -> str | None:
+def derive_sku_from_url(url_str: Optional[str]) -> Optional[str]:
     if not url_str:
         return None
     try:
@@ -107,14 +120,14 @@ def derive_sku_from_url(url_str: str | None) -> str | None:
     except Exception:
         return None
 
-def derive_sku(data: dict) -> str | None:
+def derive_sku(data: Dict[str, Any]) -> Optional[str]:
     sku = data.get("sku") or data.get("passthrough[sku]") or data.get("passthrough") or None
     if sku:
-        return _drop_module0(sku)
+        return _drop_module0(str(sku))
     f_url = data.get("fulfillment[url]") or data.get("fulfillment_url") or data.get("fulfillment")
     return derive_sku_from_url(f_url)
 
-def derive_platform(sku: str) -> str:
+def derive_platform(sku: Optional[str]) -> str:
     if not sku:
         return "unknown"
     if sku.endswith("_gemini"):
@@ -125,7 +138,7 @@ def derive_platform(sku: str) -> str:
         return "Copilot-Enterprise"
     return "GPT"
 
-def _resolve_with_table(sku: str) -> str | None:
+def _resolve_with_table(sku: str) -> Optional[str]:
     if not isinstance(AGENT_SKU_TO_AGENT, dict) or not AGENT_SKU_TO_AGENT:
         return None
     s = (sku or "").strip().lower()
@@ -135,7 +148,7 @@ def _resolve_with_table(sku: str) -> str | None:
         or AGENT_SKU_TO_AGENT.get(f"module-0-{_drop_module0(s)}")
     )
 
-def _resolve_with_fallback(sku: str) -> str | None:
+def _resolve_with_fallback(sku: str) -> Optional[str]:
     s = (sku or "").strip().lower()
     return (
         FALLBACK_SKU_TO_AGENT.get(s)
@@ -143,7 +156,7 @@ def _resolve_with_fallback(sku: str) -> str | None:
         or FALLBACK_SKU_TO_AGENT.get(f"module-0-{_drop_module0(s)}")
     )
 
-def resolve_agent_slug(sku: str) -> str | None:
+def resolve_agent_slug(sku: str) -> Optional[str]:
     if callable(get_agent_slug_from_sku):
         try:
             agent = get_agent_slug_from_sku(sku)
@@ -153,7 +166,7 @@ def resolve_agent_slug(sku: str) -> str | None:
             log.warning("Resolver error: %s", ex_resolver)
     return _resolve_with_table(sku) or _resolve_with_fallback(sku)
 
-def resolve_tier_code(sku: str) -> str | None:
+def resolve_tier_code(sku: str) -> Optional[str]:
     s = (sku or "").strip().lower()
     return (
         TIER_SKU_TO_CODE.get(s)
@@ -170,7 +183,7 @@ def _db():
         raise HTTPException(status_code=500, detail=f"DB module error: {ex_generic}")
 
 # ----------------------
-# Routes
+# Routes: basics
 # ----------------------
 @app.get("/")
 async def root():
@@ -178,24 +191,33 @@ async def root():
         "name": "Thanyaaura Gateway",
         "version": getattr(app, "version", None),
         "docs": "/docs",
-        "endpoints_hint": ["/health", "/routes", "/debug/*", "/billing/thrivecart"],
+        "endpoints_hint": ["/health", "/healthz", "/routes", "/debug/*", "/billing/thrivecart", "/entitlements/{email}", "/entitlements/company/{domain}"],
     }
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
+
 @app.get("/routes")
 async def routes():
     return [r.path for r in app.routes if isinstance(r, APIRoute)]
 
+# ----------------------
+# Routes: debug helpers
+# ----------------------
 @app.get("/debug/resolve")
 async def debug_resolve(sku: str):
+    short_sku = _drop_module0(sku)
     return {
         "sku_in": sku,
-        "agent_slug": resolve_agent_slug(sku),
-        "tier_code": resolve_tier_code(sku),
-        "platform": derive_platform(sku),
+        "sku_short": short_sku,
+        "agent_slug": resolve_agent_slug(short_sku),
+        "tier_code": resolve_tier_code(short_sku),
+        "platform": derive_platform(short_sku),
     }
 
 @app.get("/debug/sku-keys")
@@ -232,7 +254,38 @@ async def debug_db_ping():
     except Exception as ex_dbping:
         return {"ok": False, "error": str(ex_dbping)}
 
-# ---- payload reader ----
+# ----------------------
+# Entitlements endpoints (individual + enterprise)
+# ----------------------
+@app.get("/entitlements/{email}")
+async def entitlements(email: str):
+    if not ent_resolver:
+        raise HTTPException(status_code=501, detail="Entitlements resolver not available.")
+    result = ent_resolver.resolve_entitlements(email, precedence=os.getenv("ENT_PRECEDENCE", "rank"))
+    result["links"] = {
+        "gpt": os.getenv("LINK_GPT", "https://chat.openai.com/"),
+        "gemini": os.getenv("LINK_GEMINI", "https://gemini.google.com/"),
+        "copilot": os.getenv("LINK_COPILOT", "https://copilot.microsoft.com/"),
+    }
+    return result
+
+@app.get("/entitlements/company/{domain}")
+async def entitlements_company(domain: str):
+    if not enterprise_api:
+        raise HTTPException(status_code=501, detail="Enterprise API not available.")
+    ent = enterprise_api.entitlements_for_domain(domain)
+    if not ent:
+        return {"company_domain": domain, "scope": "unknown"}
+    ent["links"] = {
+        "gpt": os.getenv("LINK_GPT", "https://chat.openai.com/"),
+        "gemini": os.getenv("LINK_GEMINI", "https://gemini.google.com/"),
+        "copilot": os.getenv("LINK_COPILOT", "https://copilot.microsoft.com/"),
+    }
+    return ent
+
+# ----------------------
+# Payload reader
+# ----------------------
 async def read_payload(request: Request) -> dict:
     ctype = (request.headers.get("content-type") or "").lower()
     if "application/json" in ctype:
@@ -250,10 +303,14 @@ async def read_payload(request: Request) -> dict:
         log.warning("Form parse error: %s", ex_form)
         return {}
 
+# ----------------------
+# ThriveCart webhook
+# ----------------------
 @app.post("/billing/thrivecart")
 async def billing_thrivecart(request: Request):
     data = await read_payload(request)
 
+    # Simple shared-secret gate (must match dashboard value)
     secret_in = (
         data.get("thrivecart_secret")
         or request.headers.get("X-THRIVECART-SECRET")
@@ -267,27 +324,37 @@ async def billing_thrivecart(request: Request):
     if not sku:
         raise HTTPException(status_code=400, detail="Missing SKU (or fulfillment[url])")
 
-    tier_code = resolve_tier_code(sku)
-    agent_slug = None if tier_code else resolve_agent_slug(sku)
-    if not tier_code and not agent_slug and not sku.startswith("en_"):
-        raise HTTPException(status_code=400, detail=f"Unknown SKU: {sku}")
+    short_sku = _drop_module0(sku)
+    tier_code = resolve_tier_code(short_sku)
+    agent_slug = None if tier_code else resolve_agent_slug(short_sku)
+    if not tier_code and not agent_slug and not short_sku.startswith("en_"):
+        raise HTTPException(status_code=400, detail=f"Unknown SKU: {short_sku}")
 
     order_id = data.get("order_id") or data.get("invoice_id")
     email = data.get("customer[email]") or data.get("email")
     if not order_id or not email:
         raise HTTPException(status_code=400, detail="Missing order_id or customer[email]")
 
-    short_sku = _drop_module0(sku)
     platform = derive_platform(short_sku)
+
+    # Best-effort update of enterprise map (for Excel/env-based setups)
+    if enterprise_api:
+        try:
+            enterprise_api.apply_thrivecart_event(data)  # no-op if payload lacks enterprise hints
+        except Exception as e:
+            log.warning("apply_thrivecart_event failed: %s", e)
 
     dbmod = _db()
     try:
-        if sku.startswith("en_"):
+        if short_sku.startswith("en_"):
             await run_in_threadpool(dbmod.upsert_enterprise_license, order_id, email, short_sku, agent_slug, platform)
+            ttype = "ENTERPRISE"
         elif tier_code:
             await run_in_threadpool(dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code, platform)
+            ttype = "TIER"
         else:
             await run_in_threadpool(dbmod.upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug, platform)
+            ttype = "AGENT"
     except Exception as ex_db:
         raise HTTPException(status_code=500, detail=f"DB error: {ex_db}")
 
@@ -295,7 +362,7 @@ async def billing_thrivecart(request: Request):
         "ok": True,
         "sku": short_sku,
         "platform": platform,
-        "type": "ENTERPRISE" if sku.startswith("en_") else "TIER" if tier_code else "AGENT",
+        "type": ttype,
         "tier_code": tier_code,
         "agent_slug": agent_slug,
         "event": data.get("event"),
@@ -303,7 +370,9 @@ async def billing_thrivecart(request: Request):
         "email": email,
     }
 
-# Ensure permanent admin exists on startup
+# ----------------------
+# Startup hook
+# ----------------------
 @app.on_event("startup")
 async def ensure_admin_on_startup():
     try:
