@@ -19,10 +19,8 @@ def render_template(template_name: str, context: dict) -> str:
     return template.render(**context)
 
 def send_email(to_email: str, subject: str, html_content: str):
-    """
-    Send an email with UTF-8 encoding to avoid ascii errors on special characters.
-    """
-    msg = MIMEText(html_content, "html", "utf-8")  # ✅ Force UTF-8 encoding
+    # Force UTF-8 encoding
+    msg = MIMEText(html_content, "html", "utf-8")
     msg["Subject"] = subject
     msg["From"] = FROM_EMAIL
     msg["To"] = to_email
@@ -34,8 +32,7 @@ def send_email(to_email: str, subject: str, html_content: str):
             server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
             print(f"✅ Email sent to {to_email}: {subject}")
     except Exception as ex:
-        # Always print error with encoding-safe fallback
-        print(f"❌ Email error to {to_email}: {str(ex)}")
+        print(f"❌ Email error to {to_email}: {ex}")
 
 # -------------- Send Trial Email --------------
 def send_trial_email(day: int, user, agent_name: str, links: dict):
@@ -43,12 +40,10 @@ def send_trial_email(day: int, user, agent_name: str, links: dict):
     Send trial emails on day 1, 10, 23.
     Skip if user is the permanent admin account.
     """
-    # Skip admin user
     if user["user_email"].lower() == "thanyaaura@email.com":
         print(f"⚠️ Skipping trial email for permanent admin {user['user_email']}")
         return
 
-    # Map templates + subjects
     template_map = {
         1: ("email_day1.html", "Welcome to your Finance AI Agent – Day 1"),
         10: ("email_day10.html", "Case Study & Tips – Day 10"),
@@ -61,7 +56,6 @@ def send_trial_email(day: int, user, agent_name: str, links: dict):
 
     template_file, subject = template_map[day]
 
-    # Build context
     context = {
         "first_name": user.get("first_name", "there"),
         "agent_name": agent_name,
