@@ -219,3 +219,24 @@ __all__ = [
     "get_trial_users_by_day",
     "ensure_permanent_admin_user",
 ]
+def get_active_enterprise_license_for_domain(domain: str):
+    """
+    คืน license enterprise ล่าสุดของโดเมน (เฉพาะ en_* และสถานะ active)
+    ใช้ split_part(user_email,'@',2) เพื่อ map ความเป็นบริษัทจากอีเมลผู้ซื้อ
+    """
+    sql = """
+        SELECT sku, platform, status, user_email, created_at
+          FROM subscriptions
+         WHERE status = 'active'
+           AND sku IN ('en_standard','en_professional','en_unlimited')
+           AND lower(split_part(user_email,'@',2)) = lower(%s)
+         ORDER BY created_at DESC
+         LIMIT 1;
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (domain,))
+            return cur.fetchone()
+    except Exception as ex:
+        print(f"DB error: {ex}")
+        return None
