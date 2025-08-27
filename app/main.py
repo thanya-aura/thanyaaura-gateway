@@ -13,6 +13,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
+from app.models import RunAgentRequest
+from fastapi import Depends
+from app.auth import require_api_key
+
 # ---------- logging ----------
 def _env_log_level(default: str = "INFO") -> int:
     """Normalize LOG_LEVEL env (e.g., 'info', 'INFO', '20') to a valid logging level."""
@@ -442,3 +446,13 @@ async def ensure_admin_on_startup():
         await run_in_threadpool(dbmod.ensure_permanent_admin_user)
     except Exception as ex:
         log.warning("Could not ensure permanent admin user: %s", ex)
+
+@app.post("/agents/{sku}/run", summary="Run a Finance Agent", tags=["agents"])
+async def run_agent(sku: str, req: RunAgentRequest):
+    user_email = req.email
+    agent_slug, platform = require_entitlement_or_403(user_email, sku)
+    # TODO: call your real agent logic with req.payload
+    return {"ok": True, "agent": agent_slug, "platform": platform, "echo": req.payload or {}}
+
+@app.post("/agents/{sku}/run", dependencies=[Depends(require_api_key)])
+async def run_agent(...):
