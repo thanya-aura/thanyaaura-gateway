@@ -2,7 +2,6 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from jinja2 import Environment, FileSystemLoader
-from datetime import datetime
 
 # Email setup
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
@@ -20,7 +19,10 @@ def render_template(template_name: str, context: dict) -> str:
     return template.render(**context)
 
 def send_email(to_email: str, subject: str, html_content: str):
-    msg = MIMEText(html_content, "html")
+    """
+    Send an email with UTF-8 encoding to avoid ascii errors on special characters.
+    """
+    msg = MIMEText(html_content, "html", "utf-8")  # ✅ Force UTF-8 encoding
     msg["Subject"] = subject
     msg["From"] = FROM_EMAIL
     msg["To"] = to_email
@@ -32,7 +34,8 @@ def send_email(to_email: str, subject: str, html_content: str):
             server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
             print(f"✅ Email sent to {to_email}: {subject}")
     except Exception as ex:
-        print(f"❌ Email error to {to_email}: {ex}")
+        # Always print error with encoding-safe fallback
+        print(f"❌ Email error to {to_email}: {str(ex)}")
 
 # -------------- Send Trial Email --------------
 def send_trial_email(day: int, user, agent_name: str, links: dict):
