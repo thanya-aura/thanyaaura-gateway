@@ -276,15 +276,36 @@ def _db():
     except Exception as ex_generic:
         raise HTTPException(status_code=500, detail=f"DB module error: {ex_generic}")
 
+# ===== NEW: toggle & robust entitlement check =====
+DISABLE_ENTITLEMENT_CHECK = os.getenv("DISABLE_ENTITLEMENT_CHECK", "0") == "1"
+
 def require_entitlement_or_403(user_email: str, sku: str):
     short = _drop_module0(sku)
     agent_slug = resolve_agent_slug(short) or short.upper()
     platform = derive_platform(short)
+
+    # bypass ชั่วคราวเพื่อทดสอบ/เดโม
+    if DISABLE_ENTITLEMENT_CHECK:
+        return agent_slug, platform
+
     if not check_entitlement:
         raise HTTPException(status_code=501, detail="Entitlement checker not available.")
-    if not check_entitlement(user_email, agent_slug, platform):
-        raise HTTPException(status_code=403, detail="No entitlement for this agent/platform.")
-    return agent_slug, platform
+
+    # ลองเช็คหลายแบบ: slug → sku → เคสล่าง/บน (กันกรณี DB เก็บไม่ตรงรูป)
+    candidates = [
+        (agent_slug, platform),
+        (short, platform),
+        (agent_slug.lower(), platform),
+        (agent_slug.upper(), platform),
+    ]
+    for cand, pf in candidates:
+        try:
+            if check_entitlement(user_email, cand, pf):
+                return agent_slug, platform
+        except Exception as e:
+            log.warning("check_entitlement error on %s/%s: %s", cand, pf, e)
+
+    raise HTTPException(status_code=403, detail="No entitlement for this agent/platform.")
 
 # ---------------------- Basics ----------------------
 @app.get("/")
@@ -365,6 +386,57 @@ if IS_DEBUG_ROUTES:
             return info
         except Exception as ex_dbping:
             return {"ok": False, "error": str(ex_dbping)}
+
+    # ===== NEW: ดูผล resolve_entitlements() และ error ชัด ๆ =====
+    @app.get("/debug/entitlements/{email}")
+    async def debug_entitlements_raw(email: str):
+        if not ent_resolver:
+            return {"ok": False, "error": "ent_resolver missing"}
+        try:
+            res = ent_resolver.resolve_entitlements(
+                email, precedence=os.getenv("ENT_PRECEDENCE", "rank")
+            )
+            return {"ok": True, "result": res}
+        except Exception as ex:
+            import traceback
+            return {
+                "ok": False,
+                "error": str(ex),
+                "trace": traceback.format_exc().splitlines()[-8:],  # tail
+            }
+
+    # ===== NEW: ลองเช็คทั้ง slug/sku แล้วรายงานผลละเอียด =====
+    @app.get("/debug/check-entitlement")
+    async def debug_check_entitlement(email: str, sku: str):
+        short = _drop_module0(sku)
+        slug = resolve_agent_slug(short) or short.upper()
+        plat = derive_platform(short)
+        if not check_entitlement:
+            return {"ok": False, "error": "check_entitlement missing", "agent_slug": slug, "sku": short, "platform": plat}
+        try:
+            res_slug = False
+            res_sku = False
+            err_slug = None
+            err_sku = None
+            try:
+                res_slug = check_entitlement(email, slug, plat)
+            except Exception as e1:
+                err_slug = str(e1)
+            try:
+                res_sku = check_entitlement(email, short, plat)
+            except Exception as e2:
+                err_sku = str(e2)
+
+            return {
+                "ok": bool(res_slug or res_sku),
+                "agent_slug": slug,
+                "sku": short,
+                "platform": plat,
+                "checked": {"slug": res_slug, "sku": res_sku},
+                "errors": {"slug": err_slug, "sku": err_sku},
+            }
+        except Exception as ex:
+            return {"ok": False, "error": str(ex), "agent_slug": slug, "sku": short, "platform": plat}
 
 # ---------------------- Entitlements APIs ----------------------
 @app.get("/entitlements/{email}")
