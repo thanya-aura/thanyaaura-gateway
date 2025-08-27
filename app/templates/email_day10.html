@@ -7,7 +7,7 @@
 <body>
   <p>Hi {{first_name}},</p>
 
-  <p>You’re now on <b>Day 10 of your 30-day trial</b>. Here’s how real customers used <b>{{agent_name}}</b> to save time and deliver impact:</p>
+  <p>You’re now on <b>Day 10 of your trial</b>. Here’s how real customers used <b>{{agent_name}}</b> to save time and deliver impact:</p>
 
   <p>🎥 Watch the case study video:
      <a href="https://youtu.be/z-KECtkig1U?si=P4K-cOgOer0-xG7J" target="_blank">Click here</a>
@@ -27,12 +27,12 @@
   {% elif platform == "Gemini" %}
     <p>👉 <a href="{{gemini_link}}" target="_blank"><b>Access {{agent_name}} in Gemini</b></a></p>
     <p><b>Note:</b> Each Agent is fully integrated with <b>Gemini</b>. Work directly in Gemini and let the Agent handle everything for you.</p>
-  {% elif "Copilot" in platform %}
+  {% elif platform.startswith("Copilot") %}
     <p>👉 <a href="{{copilot_link}}" target="_blank"><b>Start {{agent_name}} in Microsoft Copilot</b></a></p>
     <p><b>Note:</b> Each Agent is fully integrated with <b>Microsoft Copilot Studio</b>. Work directly in Copilot and let the Agent handle everything for you.</p>
   {% endif %}
 
-  <p>Keep going, {{first_name}} — you’re one-third through your trial. The more you explore, the more value you’ll unlock.</p>
+  <p>Keep going — you’re halfway through your trial. The more you explore, the more value you’ll unlock.</p>
 
 </body>
 </html>

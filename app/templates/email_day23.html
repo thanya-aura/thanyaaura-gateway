@@ -7,7 +7,7 @@
 <body>
   <p>Hi {{first_name}},</p>
 
-  <p>You’re on <b>Day 23 of your 30-day trial</b> – it’s time to look at the big picture across your projects with <b>{{agent_name}}</b>.</p>
+  <p>You’re on <b>Day 23 of your trial</b> – it’s time to look at the big picture across your projects with <b>{{agent_name}}</b>.</p>
 
   <p>🎥 Watch the executive insights video:
      <a href="https://youtu.be/XlU0plBof8I?si=NyTRYpaF6ZQn-OvS" target="_blank">Click here</a>
@@ -27,13 +27,13 @@
   {% elif platform == "Gemini" %}
     <p>👉 <a href="{{gemini_link}}" target="_blank"><b>Access {{agent_name}} in Gemini</b></a></p>
     <p><b>Note:</b> Fully integrated with <b>Gemini</b>. Work directly in Gemini and let the Agent handle everything for you.</p>
-  {% elif "Copilot" in platform %}
+  {% elif platform.startswith("Copilot") %}
     <p>👉 <a href="{{copilot_link}}" target="_blank"><b>Start {{agent_name}} in Microsoft Copilot</b></a></p>
     <p><b>Note:</b> Fully integrated with <b>Microsoft Copilot Studio</b>. Work directly in Copilot and let the Agent handle everything for you.</p>
   {% endif %}
 
-  <p><b>Reminder:</b> Only a few days left in your trial – don’t miss out on unlocking the full power of {{agent_name}}.</p>
-  <p>👉 <a href="{{upgrade_link}}" target="_blank"><b>Upgrade Now to Keep Full Access</b></a></p>
+  <p><b>Reminder:</b> Only a few days left in your trial – don’t miss out on unlocking the full power of {{agent_name}}.
+     <a href="{{upgrade_link}}" target="_blank"><b>Upgrade Now</b></a></p>
 
 </body>
 </html>

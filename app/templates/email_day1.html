@@ -16,7 +16,7 @@
   {% elif platform == "Gemini" %}
     <p>You’ve joined through <b>Gemini</b>. Your Finance Agent is live and ready:</p>
     <p>👉 <a href="{{gemini_link}}" target="_blank"><b>Access {{agent_name}} in Gemini</b></a></p>
-  {% elif "Copilot" in platform %}
+  {% elif platform.startswith("Copilot") %}
     <p>You’re onboard with <b>Microsoft Copilot</b>. Your Finance Agent is set up inside Copilot Studio:</p>
     <p>👉 <a href="{{copilot_link}}" target="_blank"><b>Start {{agent_name}} in Microsoft Copilot</b></a></p>
   {% endif %}
