@@ -1,4 +1,5 @@
-# main.py – extended for GPT + Gemini + Copilot (incl. enterprise SKUs, platform-aware, entitlements endpoints)
+# app/main.py
+# Thanyaaura Gateway – GPT + Gemini + Copilot + Enterprise entitlements + Copilot-friendly OpenAPI
 
 import os
 import re
@@ -9,17 +10,14 @@ from urllib.parse import urlparse
 from json import JSONDecodeError
 from typing import Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, Security
 from fastapi.routing import APIRoute
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from starlette.concurrency import run_in_threadpool
 
-from app.models import RunAgentRequest
-from fastapi import Depends
-from app.auth import require_api_key
-
-# ---------- logging ----------
+# ========= Logging =========
 def _env_log_level(default: str = "INFO") -> int:
-    """Normalize LOG_LEVEL env (e.g., 'info', 'INFO', '20') to a valid logging level."""
     lvl = str(os.getenv("LOG_LEVEL", default)).strip()
     if lvl.isdigit():
         return int(lvl)
@@ -31,7 +29,33 @@ logging.basicConfig(
 )
 log = logging.getLogger("thanyaaura.gateway")
 
-# ---------- agents resolver (optional external table) ----------
+# ========= Models (fallback ถ้าไม่มี app.models) =========
+try:
+    from app.models import RunAgentRequest  # Pydantic model: { email, payload? }
+except Exception:
+    from pydantic import BaseModel, EmailStr, Field
+
+    class RunAgentRequest(BaseModel):
+        email: EmailStr = Field(..., description="User email (used for entitlement check)")
+        payload: Optional[Dict[str, Any]] = Field(default=None, description="Arbitrary agent input")
+
+# ========= API Key Auth (fallback ถ้าไม่มี app.auth) =========
+try:
+    from app.auth import require_api_key  # กรณีคุณมีโมดูล auth เอง
+except Exception:
+    api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
+
+    def require_api_key(api_key: Optional[str] = Security(api_key_header)):
+        """Fallback: ใช้ X-API-KEY เทียบกับ ENV COPILOT_API_KEY (ถ้าไม่ตั้งไว้จะ allow ทั้งหมด)"""
+        required = os.getenv("COPILOT_API_KEY")
+        if not required:
+            # ไม่มีการตั้งค่า → ไม่บังคับ key (สะดวกตอน dev)
+            return True
+        if api_key and api_key == required:
+            return True
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+# ========= Agents resolver (optional external table) =========
 try:
     from app.agents import get_agent_slug_from_sku, AGENT_SKU_TO_AGENT  # noqa
     log.info("Loaded resolver from app.agents (keys=%s)", len(AGENT_SKU_TO_AGENT or {}))
@@ -44,7 +68,7 @@ except Exception as ex_generic:
     get_agent_slug_from_sku = None
     AGENT_SKU_TO_AGENT = {}
 
-# ---------- fallback agent SKU map (33 base agents + variants) ----------
+# ========= Fallback agent SKU map (33 agents + variants) =========
 _BASE_FALLBACK = {
     # Cashflow (3) + aliases
     "cfs": "SINGLE_CF_AI_AGENT", "cfp": "PROJECT_CF_AI_AGENT", "cfpr": "ENTERPRISE_CF_AI_AGENT",
@@ -93,7 +117,7 @@ FALLBACK_SKU_TO_AGENT.update({
     "en_unlimited": "ENTERPRISE_LICENSE_UNLIMITED",
 })
 
-# ---------- tier SKUs (Standard/Plus/Premium) ----------
+# ========= Tier SKUs (Standard/Plus/Premium) =========
 _BASE_TIER = {
     "standard": "STANDARD", "plus": "PLUS", "premium": "PREMIUM",
     "tier_standard": "STANDARD", "tier_plus": "PLUS", "tier_premium": "PREMIUM",
@@ -102,8 +126,7 @@ TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
     TIER_SKU_TO_CODE[f"module-0-{k}"] = v
 
-# ---------- entitlements APIs (individual + enterprise) ----------
-# Optional imports; if not present, endpoints will still work with fallbacks disabled.
+# ========= Entitlements (individual + enterprise) =========
 try:
     from app import entitlements as ent_resolver
     from app import enterprise as enterprise_api
@@ -112,7 +135,7 @@ except Exception as e:
     enterprise_api = None
     log.warning("Entitlements modules not loaded (%s). Entitlement endpoints will degrade gracefully.", e)
 
-# Enterprise access checker (domain + user + tier logic)
+# Enterprise access checker
 try:
     from app.enterprise_access import check_entitlement
 except Exception as e:
@@ -121,9 +144,17 @@ except Exception as e:
 
 app = FastAPI(title="Thanyaaura Gateway", version="1.9.0")
 
-# ----------------------
-# Helpers
-# ----------------------
+# ========= CORS (optional สำหรับ dev / Copilot import) =========
+allow_origins = [o.strip() for o in (os.getenv("ALLOW_ORIGINS", "*")).split(",")]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ========= Helpers =========
 def _drop_module0(s: str) -> str:
     s = (s or "").strip().lower()
     return s[9:] if s.startswith("module-0-") else s
@@ -139,7 +170,7 @@ def derive_sku_from_url(url_str: Optional[str]) -> Optional[str]:
         return None
 
 def derive_sku(data: Dict[str, Any]) -> Optional[str]:
-    sku = data.get("sku") or data.get("passthrough[sku]") or data.get("passthrough") or None
+    sku = data.get("sku") or data.get("passthrough[sku]") or data.get("passthrough")
     if sku:
         return _drop_module0(str(sku))
     f_url = data.get("fulfillment[url]") or data.get("fulfillment_url") or data.get("fulfillment")
@@ -200,33 +231,30 @@ def _db():
     except Exception as ex_generic:
         raise HTTPException(status_code=500, detail=f"DB module error: {ex_generic}")
 
-# ----------------------
-# Entitlement gate helper
-# ----------------------
+# ========= Entitlement gate =========
 def require_entitlement_or_403(user_email: str, sku: str):
     """
-    Convert SKU -> agent_slug & platform and check access using enterprise/user logic.
-    Raises 403 if not allowed.
+    แปลง SKU -> (agent_slug, platform) และตรวจสิทธิ์:
+    - Individual: จาก subscriptions ของ email
+    - Enterprise: จาก domain + enterprise license (en_standard/professional/unlimited)
     """
     short = _drop_module0(sku)
     agent_slug = resolve_agent_slug(short) or short.upper()
     platform = derive_platform(short)
     if not check_entitlement:
-        # If the checker isn't available, fail-closed to avoid accidental open access.
         raise HTTPException(status_code=501, detail="Entitlement checker not available.")
     if not check_entitlement(user_email, agent_slug, platform):
         raise HTTPException(status_code=403, detail="No entitlement for this agent/platform.")
     return agent_slug, platform
 
-# ----------------------
-# Routes: basics
-# ----------------------
+# ========= Routes: basics =========
 @app.get("/")
 async def root():
     return {
         "name": "Thanyaaura Gateway",
         "version": getattr(app, "version", None),
         "docs": "/docs",
+        "openapi": "/openapi.json",
         "endpoints_hint": [
             "/health", "/healthz", "/routes", "/debug/*",
             "/billing/thrivecart",
@@ -248,9 +276,7 @@ async def healthz():
 async def routes():
     return [r.path for r in app.routes if isinstance(r, APIRoute)]
 
-# ----------------------
-# Routes: debug helpers
-# ----------------------
+# ========= Routes: debug =========
 @app.get("/debug/resolve")
 async def debug_resolve(sku: str):
     short_sku = _drop_module0(sku)
@@ -296,9 +322,7 @@ async def debug_db_ping():
     except Exception as ex_dbping:
         return {"ok": False, "error": str(ex_dbping)}
 
-# ----------------------
-# Entitlements endpoints (individual + enterprise)
-# ----------------------
+# ========= Entitlements endpoints =========
 @app.get("/entitlements/{email}")
 async def entitlements(email: str):
     if not ent_resolver:
@@ -325,33 +349,28 @@ async def entitlements_company(domain: str):
     }
     return ent
 
-# ----------------------
-# Example: run an agent (with entitlement check)
-# ----------------------
-@app.post("/agents/{sku}/run")
-async def run_agent(sku: str, req: Dict[str, Any]):
+# ========= Example: run an agent (secured, entitlement-checked) =========
+@app.post(
+    "/agents/{sku}/run",
+    summary="Run a Finance Agent",
+    tags=["agents"],
+    dependencies=[Depends(require_api_key)],
+)
+async def run_agent(sku: str, req: RunAgentRequest):
     """
-    Minimal demo endpoint:
-    - expects JSON with {"email": "..."} (rename to your actual field if needed)
-    - checks entitlement based on SKU -> agent_slug + platform
-    - returns a stubbed result after access-check
+    - Body ต้องมี `email` (ใช้ตรวจสิทธิ์) และ `payload` (ข้อมูลสำหรับเอเจนต์)
+    - ตรวจสิทธิ์ด้วย enterprise/user entitlement ก่อน
     """
-    user_email = req.get("email") or req.get("user_email")
-    if not user_email:
-        raise HTTPException(status_code=400, detail="Missing user email")
-
+    user_email = req.email
     agent_slug, platform = require_entitlement_or_403(user_email, sku)
 
-    # ---- TODO: call your real agent runner here ----
-    # result = await actually_run_agent(agent_slug, req_payload=req, platform=platform)
+    # TODO: เรียก logic ของเอเจนต์จริงที่นี่
+    # result = await actually_run_agent(agent_slug, req.payload, platform=platform)
     # return {"ok": True, "agent": agent_slug, "platform": platform, "result": result}
 
-    # Stubbed response
-    return {"ok": True, "agent": agent_slug, "platform": platform, "note": "Replace with real agent execution."}
+    return {"ok": True, "agent": agent_slug, "platform": platform, "echo": (req.payload or {})}
 
-# ----------------------
-# Payload reader
-# ----------------------
+# ========= Payload reader (สำหรับ webhook) =========
 async def read_payload(request: Request) -> dict:
     ctype = (request.headers.get("content-type") or "").lower()
     if "application/json" in ctype:
@@ -369,14 +388,11 @@ async def read_payload(request: Request) -> dict:
         log.warning("Form parse error: %s", ex_form)
         return {}
 
-# ----------------------
-# ThriveCart webhook
-# ----------------------
+# ========= ThriveCart webhook =========
 @app.post("/billing/thrivecart")
 async def billing_thrivecart(request: Request):
     data = await read_payload(request)
 
-    # Simple shared-secret gate (must match dashboard value)
     secret_in = (
         data.get("thrivecart_secret")
         or request.headers.get("X-THRIVECART-SECRET")
@@ -403,10 +419,10 @@ async def billing_thrivecart(request: Request):
 
     platform = derive_platform(short_sku)
 
-    # Best-effort update of enterprise map (for Excel/env-based setups)
+    # sync โดเมน enterprise (ถ้ามีโมดูล)
     if enterprise_api:
         try:
-            enterprise_api.apply_thrivecart_event(data)  # no-op if payload lacks enterprise hints
+            enterprise_api.apply_thrivecart_event(data)
         except Exception as e:
             log.warning("apply_thrivecart_event failed: %s", e)
 
@@ -436,9 +452,7 @@ async def billing_thrivecart(request: Request):
         "email": email,
     }
 
-# ----------------------
-# Startup hook
-# ----------------------
+# ========= Startup =========
 @app.on_event("startup")
 async def ensure_admin_on_startup():
     try:
@@ -446,13 +460,3 @@ async def ensure_admin_on_startup():
         await run_in_threadpool(dbmod.ensure_permanent_admin_user)
     except Exception as ex:
         log.warning("Could not ensure permanent admin user: %s", ex)
-
-@app.post("/agents/{sku}/run", summary="Run a Finance Agent", tags=["agents"])
-async def run_agent(sku: str, req: RunAgentRequest):
-    user_email = req.email
-    agent_slug, platform = require_entitlement_or_403(user_email, sku)
-    # TODO: call your real agent logic with req.payload
-    return {"ok": True, "agent": agent_slug, "platform": platform, "echo": req.payload or {}}
-
-@app.post("/agents/{sku}/run", dependencies=[Depends(require_api_key)])
-async def run_agent(...):
