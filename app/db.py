@@ -31,47 +31,53 @@ def ping_db():
 def upsert_subscription_and_entitlement(order_id: str, user_email: str, sku: str, agent_slug: str, platform: str, status: str = "active"):
     """
     Store subscription for a specific agent (GPT/Gemini/Copilot).
+    Uses id as unique key (tc-agent-{sku}).
     """
     sql = """
-        INSERT INTO subscriptions (order_id, user_email, sku, agent_slug, platform, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, now(), now())
-        ON CONFLICT (order_id, user_email, sku)
+        INSERT INTO subscriptions (id, order_id, user_email, sku, agent_slug, platform, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, now(), now())
+        ON CONFLICT (id)
         DO UPDATE SET agent_slug = EXCLUDED.agent_slug,
-                      platform = EXCLUDED.platform,
-                      status = EXCLUDED.status,
+                      platform   = EXCLUDED.platform,
+                      status     = EXCLUDED.status,
                       updated_at = now();
     """
-    return _upsert(sql, (order_id, user_email, sku, agent_slug, platform, status))
+    db_id = f"tc-agent-{sku}"
+    return _upsert(sql, (db_id, order_id, user_email, sku, agent_slug, platform, status))
 
 def upsert_tier_subscription(order_id: str, user_email: str, sku: str, tier: str, platform: str, status: str = "active"):
     """
     Store subscription for a tier plan (Standard / Plus / Premium).
+    Uses id as unique key (tc-tier-{sku}).
     """
     sql = """
-        INSERT INTO subscriptions (order_id, user_email, sku, tier, platform, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, now(), now())
-        ON CONFLICT (order_id, user_email, sku)
-        DO UPDATE SET tier = EXCLUDED.tier,
-                      platform = EXCLUDED.platform,
-                      status = EXCLUDED.status,
+        INSERT INTO subscriptions (id, order_id, user_email, sku, tier, platform, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, now(), now())
+        ON CONFLICT (id)
+        DO UPDATE SET tier       = EXCLUDED.tier,
+                      platform   = EXCLUDED.platform,
+                      status     = EXCLUDED.status,
                       updated_at = now();
     """
-    return _upsert(sql, (order_id, user_email, sku, tier, platform, status))
+    db_id = f"tc-tier-{sku}"
+    return _upsert(sql, (db_id, order_id, user_email, sku, tier, platform, status))
 
 def upsert_enterprise_license(order_id: str, user_email: str, sku: str, license_type: str, platform: str, status: str = "active"):
     """
     Store Copilot enterprise license (en_standard, en_professional, en_unlimited).
+    Uses id as unique key (tc-ent-{sku}).
     """
     sql = """
-        INSERT INTO subscriptions (order_id, user_email, sku, tier, platform, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, now(), now())
-        ON CONFLICT (order_id, user_email, sku)
-        DO UPDATE SET tier = EXCLUDED.tier,
-                      platform = EXCLUDED.platform,
-                      status = EXCLUDED.status,
+        INSERT INTO subscriptions (id, order_id, user_email, sku, tier, platform, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, now(), now())
+        ON CONFLICT (id)
+        DO UPDATE SET tier       = EXCLUDED.tier,
+                      platform   = EXCLUDED.platform,
+                      status     = EXCLUDED.status,
                       updated_at = now();
     """
-    return _upsert(sql, (order_id, user_email, sku, license_type, platform, status))
+    db_id = f"tc-ent-{sku}"
+    return _upsert(sql, (db_id, order_id, user_email, sku, license_type, platform, status))
 
 def cancel_subscription(user_email: str, sku: str = None):
     """
@@ -120,7 +126,7 @@ def fetch_effective_agents(user_email: str):
 def get_trial_users_by_day(day_offset: int = 0):
     """
     Return list of trial users that started exactly `day_offset` days ago.
-    Example: day_offset=0 -> today, 1 -> yesterday, etc.
+    Includes platform for platform-aware emails.
     """
     sql = """
         SELECT user_email, created_at, platform
@@ -133,7 +139,8 @@ def get_trial_users_by_day(day_offset: int = 0):
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql, (day_offset,))
             return cur.fetchall()
-    except Exception:
+    except Exception as ex:
+        print(f"DB error: {ex}")
         return []
 
 __all__ = [
