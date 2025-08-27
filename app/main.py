@@ -8,11 +8,28 @@ from urllib.parse import urlparse
 from json import JSONDecodeError
 from typing import Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
-from app.models import RunAgentRequest
+# ---------- Pydantic request model (with safe fallback) ----------
+try:
+    # ใช้ไฟล์ models.py ตามปกติ
+    from app.models import RunAgentRequest
+except Exception as _e:  # ไม่ให้ deploy ล้มถ้า refactor ชื่อไฟล์/โมดูล
+    from typing import Optional, Dict, Any
+    from pydantic import BaseModel, Field, ConfigDict, EmailStr
+
+    class RunAgentRequest(BaseModel):
+        email: EmailStr = Field(
+            ..., description="End-user email (UPN) used for entitlement check"
+        )
+        payload: Optional[Dict[str, Any]] = Field(
+            default=None, description="Agent-specific inputs"
+        )
+        model_config = ConfigDict(extra="forbid")
+
 from app.auth import require_api_key
 
 # ---------- logging ----------
@@ -41,30 +58,74 @@ except Exception as ex_generic:
     get_agent_slug_from_sku = None
     AGENT_SKU_TO_AGENT = {}
 
-# ---------- fallback agent SKU map (33 base agents + variants) ----------
+# ---------- fallback agent SKU map (base + variants) ----------
 _BASE_FALLBACK = {
-    "cfs": "SINGLE_CF_AI_AGENT", "cfp": "PROJECT_CF_AI_AGENT", "cfpr": "ENTERPRISE_CF_AI_AGENT",
-    "single_cf": "SINGLE_CF_AI_AGENT", "project_cf": "PROJECT_CF_AI_AGENT", "enterprise_cf": "ENTERPRISE_CF_AI_AGENT",
-    "revs": "REVENUE_STANDARD", "revp": "REVENUE_INTERMEDIATE", "revpr": "REVENUE_ADVANCE",
-    "revenue_standard": "REVENUE_STANDARD", "revenue_intermediate": "REVENUE_INTERMEDIATE", "revenue_advance": "REVENUE_ADVANCE",
-    "capexs": "CAPEX_STANDARD", "capexp": "CAPEX_PLUS", "capexpr": "CAPEX_PREMIUM",
-    "capex_standard": "CAPEX_STANDARD", "capex_plus": "CAPEX_PLUS", "capex_premium": "CAPEX_PREMIUM",
-    "fxs": "FX_STANDARD", "fxp": "FX_PLUS", "fxpr": "FX_PREMIUM",
-    "fx_standard": "FX_STANDARD", "fx_plus": "FX_PLUS", "fx_premium": "FX_PREMIUM",
-    "costs": "COST_STANDARD", "costp": "COST_PLUS", "costpr": "COST_PREMIUM",
-    "cost_standard": "COST_STANDARD", "cost_plus": "COST_PLUS", "cost_premium": "COST_PREMIUM",
-    "buds": "BUDGET_STANDARD", "budp": "BUDGET_PLUS", "budpr": "BUDGET_PREMIUM",
-    "budget_standard": "BUDGET_STANDARD", "budget_plus": "BUDGET_PLUS", "budget_premium": "BUDGET_PREMIUM",
-    "reps": "REPORT_STANDARD", "repp": "REPORT_PLUS", "reppr": "REPORT_PREMIUM",
-    "report_standard": "REPORT_STANDARD", "report_plus": "REPORT_PLUS", "report_premium": "REPORT_PREMIUM",
-    "vars": "VARIANCE_STANDARD", "varp": "VARIANCE_PLUS", "varpr": "VARIANCE_PREMIUM",
-    "variance_standard": "VARIANCE_STANDARD", "variance_plus": "VARIANCE_PLUS", "variance_premium": "VARIANCE_PREMIUM",
-    "mars": "MARGIN_STANDARD", "marp": "MARGIN_PLUS", "marpr": "MARGIN_PREMIUM",
-    "margin_standard": "MARGIN_STANDARD", "margin_plus": "MARGIN_PLUS", "margin_premium": "MARGIN_PREMIUM",
-    "fors": "FORECAST_STANDARD", "forp": "FORECAST_PLUS", "forpr": "FORECAST_PREMIUM",
-    "forecast_standard": "FORECAST_STANDARD", "forecast_plus": "FORECAST_PLUS", "forecast_premium": "FORECAST_PREMIUM",
-    "decs": "DECISION_STANDARD", "decp": "DECISION_PLUS", "decpr": "DECISION_PREMIUM",
-    "decision_standard": "DECISION_STANDARD", "decision_plus": "DECISION_PLUS", "decision_premium": "DECISION_PREMIUM",
+    "cfs": "SINGLE_CF_AI_AGENT",
+    "cfp": "PROJECT_CF_AI_AGENT",
+    "cfpr": "ENTERPRISE_CF_AI_AGENT",
+    "single_cf": "SINGLE_CF_AI_AGENT",
+    "project_cf": "PROJECT_CF_AI_AGENT",
+    "enterprise_cf": "ENTERPRISE_CF_AI_AGENT",
+    "revs": "REVENUE_STANDARD",
+    "revp": "REVENUE_INTERMEDIATE",
+    "revpr": "REVENUE_ADVANCE",
+    "revenue_standard": "REVENUE_STANDARD",
+    "revenue_intermediate": "REVENUE_INTERMEDIATE",
+    "revenue_advance": "REVENUE_ADVANCE",
+    "capexs": "CAPEX_STANDARD",
+    "capexp": "CAPEX_PLUS",
+    "capexpr": "CAPEX_PREMIUM",
+    "capex_standard": "CAPEX_STANDARD",
+    "capex_plus": "CAPEX_PLUS",
+    "capex_premium": "CAPEX_PREMIUM",
+    "fxs": "FX_STANDARD",
+    "fxp": "FX_PLUS",
+    "fxpr": "FX_PREMIUM",
+    "fx_standard": "FX_STANDARD",
+    "fx_plus": "FX_PLUS",
+    "fx_premium": "FX_PREMIUM",
+    "costs": "COST_STANDARD",
+    "costp": "COST_PLUS",
+    "costpr": "COST_PREMIUM",
+    "cost_standard": "COST_STANDARD",
+    "cost_plus": "COST_PLUS",
+    "cost_premium": "COST_PREMIUM",
+    "buds": "BUDGET_STANDARD",
+    "budp": "BUDGET_PLUS",
+    "budpr": "BUDGET_PREMIUM",
+    "budget_standard": "BUDGET_STANDARD",
+    "budget_plus": "BUDGET_PLUS",
+    "budget_premium": "BUDGET_PREMIUM",
+    "reps": "REPORT_STANDARD",
+    "repp": "REPORT_PLUS",
+    "reppr": "REPORT_PREMIUM",
+    "report_standard": "REPORT_STANDARD",
+    "report_plus": "REPORT_PLUS",
+    "report_premium": "REPORT_PREMIUM",
+    "vars": "VARIANCE_STANDARD",
+    "varp": "VARIANCE_PLUS",
+    "varpr": "VARIANCE_PREMIUM",
+    "variance_standard": "VARIANCE_STANDARD",
+    "variance_plus": "VARIANCE_PLUS",
+    "variance_premium": "VARIANCE_PREMIUM",
+    "mars": "MARGIN_STANDARD",
+    "marp": "MARGIN_PLUS",
+    "marpr": "MARGIN_PREMIUM",
+    "margin_standard": "MARGIN_STANDARD",
+    "margin_plus": "MARGIN_PLUS",
+    "margin_premium": "MARGIN_PREMIUM",
+    "fors": "FORECAST_STANDARD",
+    "forp": "FORECAST_PLUS",
+    "forpr": "FORECAST_PREMIUM",
+    "forecast_standard": "FORECAST_STANDARD",
+    "forecast_plus": "FORECAST_PLUS",
+    "forecast_premium": "FORECAST_PREMIUM",
+    "decs": "DECISION_STANDARD",
+    "decp": "DECISION_PLUS",
+    "decpr": "DECISION_PREMIUM",
+    "decision_standard": "DECISION_STANDARD",
+    "decision_plus": "DECISION_PLUS",
+    "decision_premium": "DECISION_PREMIUM",
 }
 FALLBACK_SKU_TO_AGENT = dict(_BASE_FALLBACK)
 for k, v in list(_BASE_FALLBACK.items()):
@@ -72,15 +133,21 @@ for k, v in list(_BASE_FALLBACK.items()):
     FALLBACK_SKU_TO_AGENT[f"{k}_gemini"] = v
     FALLBACK_SKU_TO_AGENT[f"{k}_ms"] = v
 
-FALLBACK_SKU_TO_AGENT.update({
-    "en_standard": "ENTERPRISE_LICENSE_STANDARD",
-    "en_professional": "ENTERPRISE_LICENSE_PRO",
-    "en_unlimited": "ENTERPRISE_LICENSE_UNLIMITED",
-})
+FALLBACK_SKU_TO_AGENT.update(
+    {
+        "en_standard": "ENTERPRISE_LICENSE_STANDARD",
+        "en_professional": "ENTERPRISE_LICENSE_PRO",
+        "en_unlimited": "ENTERPRISE_LICENSE_UNLIMITED",
+    }
+)
 
 _BASE_TIER = {
-    "standard": "STANDARD", "plus": "PLUS", "premium": "PREMIUM",
-    "tier_standard": "STANDARD", "tier_plus": "PLUS", "tier_premium": "PREMIUM",
+    "standard": "STANDARD",
+    "plus": "PLUS",
+    "premium": "PREMIUM",
+    "tier_standard": "STANDARD",
+    "tier_plus": "PLUS",
+    "tier_premium": "PREMIUM",
 }
 TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
@@ -92,7 +159,10 @@ try:
 except Exception as e:
     ent_resolver = None
     enterprise_api = None
-    log.warning("Entitlements modules not loaded (%s). Entitlement endpoints will degrade gracefully.", e)
+    log.warning(
+        "Entitlements modules not loaded (%s). Entitlement endpoints will degrade gracefully.",
+        e,
+    )
 
 try:
     from app.enterprise_access import check_entitlement  # gating
@@ -101,6 +171,31 @@ except Exception as e:
     log.warning("enterprise_access.check_entitlement not available (%s).", e)
 
 app = FastAPI(title="Thanyaaura Gateway", version="1.9.0")
+
+# ---------- CORS (configurable via ENV CORS_ORIGINS=csv) ----------
+def _parse_csv_env(name: str, default_list: list[str]) -> list[str]:
+    s = os.getenv(name)
+    if not s:
+        return default_list
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+ALLOWED_ORIGINS = _parse_csv_env(
+    "CORS_ORIGINS",
+    [
+        "https://api.thanyaaura.com",
+        "https://www.thanyaaura.com",
+        "https://app.thanyaaura.com",
+        "https://thanyaaura-gateway.onrender.com",
+    ],
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ---------------------- Helpers ----------------------
 def _drop_module0(s: str) -> str:
@@ -121,7 +216,9 @@ def derive_sku(data: Dict[str, Any]) -> Optional[str]:
     sku = data.get("sku") or data.get("passthrough[sku]") or data.get("passthrough")
     if sku:
         return _drop_module0(str(sku))
-    f_url = data.get("fulfillment[url]") or data.get("fulfillment_url") or data.get("fulfillment")
+    f_url = (
+        data.get("fulfillment[url]") or data.get("fulfillment_url") or data.get("fulfillment")
+    )
     return derive_sku_from_url(f_url)
 
 def derive_platform(sku: Optional[str]) -> str:
@@ -197,11 +294,14 @@ async def root():
         "version": getattr(app, "version", None),
         "docs": "/docs",
         "endpoints_hint": [
-            "/health", "/healthz", "/routes", "/debug/*",
+            "/health",
+            "/healthz",
+            "/routes",
+            "/debug/*",
             "/billing/thrivecart",
             "/entitlements/{email}",
             "/entitlements/company/{domain}",
-            "/agents/{sku}/run"
+            "/agents/{sku}/run",
         ],
     }
 
@@ -217,58 +317,63 @@ async def healthz():
 async def routes():
     return [r.path for r in app.routes if isinstance(r, APIRoute)]
 
-# ---------------------- Debug ----------------------
-@app.get("/debug/resolve")
-async def debug_resolve(sku: str):
-    short_sku = _drop_module0(sku)
-    return {
-        "sku_in": sku,
-        "sku_short": short_sku,
-        "agent_slug": resolve_agent_slug(short_sku),
-        "tier_code": resolve_tier_code(short_sku),
-        "platform": derive_platform(short_sku),
-    }
+# ---------------------- Debug (conditional via ENV) ----------------------
+IS_DEBUG_ROUTES = os.getenv("ENABLE_DEBUG_ROUTES", "0") == "1"
 
-@app.get("/debug/sku-keys")
-async def debug_sku_keys():
-    keys = set()
-    if isinstance(AGENT_SKU_TO_AGENT, dict):
-        keys.update(list(AGENT_SKU_TO_AGENT.keys()))
-    keys.update(FALLBACK_SKU_TO_AGENT.keys())
-    keys.update(TIER_SKU_TO_CODE.keys())
-    return sorted(keys)
-
-@app.get("/debug/agents-state")
-async def debug_agents_state():
-    try:
-        from app import agents as _agents
-        table = getattr(_agents, "AGENT_SKU_TO_AGENT", {})
-        has_func = callable(getattr(_agents, "get_agent_slug_from_sku", None))
-        sample = sorted(table.keys())[:20] if isinstance(table, dict) else []
+if IS_DEBUG_ROUTES:
+    @app.get("/debug/resolve")
+    async def debug_resolve(sku: str):
+        short_sku = _drop_module0(sku)
         return {
-            "loaded": True,
-            "has_func": has_func,
-            "keys_count": len(table) if isinstance(table, dict) else 0,
-            "keys_sample": sample,
+            "sku_in": sku,
+            "sku_short": short_sku,
+            "agent_slug": resolve_agent_slug(short_sku),
+            "tier_code": resolve_tier_code(short_sku),
+            "platform": derive_platform(short_sku),
         }
-    except Exception as ex_agents:
-        return {"loaded": False, "error": str(ex_agents)}
 
-@app.get("/debug/db-ping")
-async def debug_db_ping():
-    try:
-        dbmod = _db()
-        info = await run_in_threadpool(dbmod.ping_db)
-        return info
-    except Exception as ex_dbping:
-        return {"ok": False, "error": str(ex_dbping)}
+    @app.get("/debug/sku-keys")
+    async def debug_sku_keys():
+        keys = set()
+        if isinstance(AGENT_SKU_TO_AGENT, dict):
+            keys.update(list(AGENT_SKU_TO_AGENT.keys()))
+        keys.update(FALLBACK_SKU_TO_AGENT.keys())
+        keys.update(TIER_SKU_TO_CODE.keys())
+        return sorted(keys)
+
+    @app.get("/debug/agents-state")
+    async def debug_agents_state():
+        try:
+            from app import agents as _agents
+            table = getattr(_agents, "AGENT_SKU_TO_AGENT", {})
+            has_func = callable(getattr(_agents, "get_agent_slug_from_sku", None))
+            sample = sorted(table.keys())[:20] if isinstance(table, dict) else []
+            return {
+                "loaded": True,
+                "has_func": has_func,
+                "keys_count": len(table) if isinstance(table, dict) else 0,
+                "keys_sample": sample,
+            }
+        except Exception as ex_agents:
+            return {"loaded": False, "error": str(ex_agents)}
+
+    @app.get("/debug/db-ping")
+    async def debug_db_ping():
+        try:
+            dbmod = _db()
+            info = await run_in_threadpool(dbmod.ping_db)
+            return info
+        except Exception as ex_dbping:
+            return {"ok": False, "error": str(ex_dbping)}
 
 # ---------------------- Entitlements APIs ----------------------
 @app.get("/entitlements/{email}")
 async def entitlements(email: str):
     if not ent_resolver:
         raise HTTPException(status_code=501, detail="Entitlements resolver not available.")
-    result = ent_resolver.resolve_entitlements(email, precedence=os.getenv("ENT_PRECEDENCE", "rank"))
+    result = ent_resolver.resolve_entitlements(
+        email, precedence=os.getenv("ENT_PRECEDENCE", "rank")
+    )
     result["links"] = {
         "gpt": os.getenv("LINK_GPT", "https://chat.openai.com/"),
         "gemini": os.getenv("LINK_GEMINI", "https://gemini.google.com/"),
@@ -291,7 +396,12 @@ async def entitlements_company(domain: str):
     return ent
 
 # ---------------------- Agents: run (with entitlement) ----------------------
-@app.post("/agents/{sku}/run", summary="Run a Finance Agent", tags=["agents"], dependencies=[Depends(require_api_key)])
+@app.post(
+    "/agents/{sku}/run",
+    summary="Run a Finance Agent",
+    tags=["agents"],
+    dependencies=[Depends(require_api_key)],
+)
 async def run_agent(sku: str, req: RunAgentRequest):
     user_email = req.email
     agent_slug, platform = require_entitlement_or_403(user_email, sku)
@@ -356,13 +466,24 @@ async def billing_thrivecart(request: Request):
     dbmod = _db()
     try:
         if short_sku.startswith("en_"):
-            await run_in_threadpool(dbmod.upsert_enterprise_license, order_id, email, short_sku, agent_slug, platform)
+            await run_in_threadpool(
+                dbmod.upsert_enterprise_license, order_id, email, short_sku, agent_slug, platform
+            )
             ttype = "ENTERPRISE"
         elif tier_code:
-            await run_in_threadpool(dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code, platform)
+            await run_in_threadpool(
+                dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code, platform
+            )
             ttype = "TIER"
         else:
-            await run_in_threadpool(dbmod.upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug, platform)
+            await run_in_threadpool(
+                dbmod.upsert_subscription_and_entitlement,
+                order_id,
+                email,
+                short_sku,
+                agent_slug,
+                platform,
+            )
             ttype = "AGENT"
     except Exception as ex_db:
         raise HTTPException(status_code=500, detail=f"DB error: {ex_db}")
@@ -387,3 +508,9 @@ async def ensure_admin_on_startup():
         await run_in_threadpool(dbmod.ensure_permanent_admin_user)
     except Exception as ex:
         log.warning("Could not ensure permanent admin user: %s", ex)
+
+# ---------------------- HEAD / (avoid 405 in probes) ----------------------
+@app.head("/")
+def head_root():
+    # ตอบแบบไม่มีบอดี้ เพื่อให้ health probe ที่ยิง HEAD / ไม่เจอ 405
+    return Response(status_code=204)

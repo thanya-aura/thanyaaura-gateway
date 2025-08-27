@@ -14,15 +14,12 @@ class RunAgentRequest(BaseModel):
         description="Agent-specific inputs"
     )
 
-    # Pydantic v2 config
     model_config = ConfigDict(
-        extra="forbid",  # กัน field แปลกปลอมใน body
+        extra="forbid",
         json_schema_extra={
             "examples": [
-                {
-                    "email": "alice@company.com",
-                    "payload": {"month": "2025-08", "currency": "USD"}
-                }
+                {"email": "alice@company.com",
+                 "payload": {"month": "2025-08", "currency": "USD"}}
             ]
         },
     )
