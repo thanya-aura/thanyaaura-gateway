@@ -6,19 +6,36 @@
 </head>
 <body>
   <p>Hi {{first_name}},</p>
+
   <p>Welcome to <b>{{agent_name}}</b> 🚀</p>
-  <p>Your GPT Agent is ready! Click the link below to start:</p>
-  <p>👉 Start with {{agent_name}} → <a href="{{gpt_link}}" target="_blank">{{gpt_link}}</a></p>
-  <p>🎥 Demo video:
+  <p>You’re on <b>Day 1 of your 30-day trial</b>. Let’s get you started quickly!</p>
+
+  {% if platform == "GPT" %}
+    <p>Your <b>GPT Finance Agent</b> is ready! Click below to launch:</p>
+    <p>👉 <a href="{{gpt_link}}" target="_blank"><b>Launch {{agent_name}} in GPT Now</b></a></p>
+  {% elif platform == "Gemini" %}
+    <p>You’ve joined through <b>Gemini</b>. Your Finance Agent is live and ready:</p>
+    <p>👉 <a href="{{gemini_link}}" target="_blank"><b>Access {{agent_name}} in Gemini</b></a></p>
+  {% elif platform.startswith("Copilot") %}
+    <p>You’re onboard with <b>Microsoft Copilot</b>. Your Finance Agent is set up inside Copilot Studio:</p>
+    <p>👉 <a href="{{copilot_link}}" target="_blank"><b>Start {{agent_name}} in Microsoft Copilot</b></a></p>
+  {% endif %}
+
+  <p>🎥 Quick demo video:
      <a href="https://youtu.be/bsZ30TwuVhM?si=MdODCvZwgvE35RGi" target="_blank">Watch here</a>
   </p>
+
+  <p>Here are some example prompts you can try right now:</p>
   <ul>
-    <li>Example Prompt 1: Generate a financial PowerPoint summary</li>
-    <li>Example Prompt 2: Create a live data insight in 2 minutes</li>
+    <li><b>Prompt 1:</b> Generate a financial PowerPoint summary</li>
+    <li><b>Prompt 2:</b> Create a live data insight in 2 minutes</li>
   </ul>
-  <p><b>Note:</b> Our Agent is already connected with the GPT backend.
-     You can work directly inside GPT — the Agent will automatically handle the tasks for you.</p>
+
+  <p><b>Note:</b> Our Agents are already connected with the backend.
+     You can work directly inside {{platform}} — the Agent will automatically handle the tasks for you.</p>
+
   <p>We’ve also prepared a quick overview of all 11 Agents for you.</p>
+
   <p>Enjoy your journey,<br>Thanyaaura Team</p>
 </body>
 </html>

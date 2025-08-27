@@ -1,7 +1,7 @@
-# agents.py - updated mapping with all 33 agents (full SKU, short alias, module-0- form)
+# agents.py – extended mapping with GPT, Gemini, Copilot (incl. enterprise SKUs)
 
 AGENT_SKU_TO_AGENT = {
-    # Budget
+    # ===== Budget =====
     "budget_standard": "budget_standard",
     "budget_plus": "budget_plus",
     "budget_premium": "budget_premium",
@@ -12,7 +12,7 @@ AGENT_SKU_TO_AGENT = {
     "module-0-budget-plus": "budget_plus",
     "module-0-budget-premium": "budget_premium",
 
-    # Capex
+    # ===== Capex =====
     "capex_standard": "capex_standard",
     "capex_plus": "capex_plus",
     "capex_premium": "capex_premium",
@@ -23,7 +23,7 @@ AGENT_SKU_TO_AGENT = {
     "module-0-capex-plus": "capex_plus",
     "module-0-capex-premium": "capex_premium",
 
-    # Cost
+    # ===== Cost =====
     "cost_standard": "cost_standard",
     "cost_plus": "cost_plus",
     "cost_premium": "cost_premium",
@@ -34,7 +34,7 @@ AGENT_SKU_TO_AGENT = {
     "module-0-cost-plus": "cost_plus",
     "module-0-cost-premium": "cost_premium",
 
-    # Decision
+    # ===== Decision =====
     "decision_standard": "decision_standard",
     "decision_plus": "decision_plus",
     "decision_premium": "decision_premium",
@@ -45,23 +45,23 @@ AGENT_SKU_TO_AGENT = {
     "module-0-decision-plus": "decision_plus",
     "module-0-decision-premium": "decision_premium",
 
-    # Enterprise CF
+    # ===== Enterprise CF =====
     "enterprise_cf": "enterprise_cf",
     "entcf": "enterprise_cf",
     "module-0-enterprise-cf": "enterprise_cf",
 
-    # Forecast
+    # ===== Forecast =====
     "forecast_standard": "forecast_standard",
     "forecast_plus": "forecast_plus",
     "forecast_premium": "forecast_premium",
-    "forecasts": "forecast_standard",
-    "forecastp": "forecast_plus",
-    "forecastpr": "forecast_premium",
+    "fors": "forecast_standard",
+    "forp": "forecast_plus",
+    "forpr": "forecast_premium",
     "module-0-forecast-standard": "forecast_standard",
     "module-0-forecast-plus": "forecast_plus",
     "module-0-forecast-premium": "forecast_premium",
 
-    # FX
+    # ===== FX =====
     "fx_standard": "fx_standard",
     "fx_plus": "fx_plus",
     "fx_premium": "fx_premium",
@@ -72,50 +72,50 @@ AGENT_SKU_TO_AGENT = {
     "module-0-fx-plus": "fx_plus",
     "module-0-fx-premium": "fx_premium",
 
-    # Margin
+    # ===== Margin =====
     "margin_standard": "margin_standard",
     "margin_plus": "margin_plus",
     "margin_premium": "margin_premium",
-    "margs": "margin_standard",
-    "margp": "margin_plus",
-    "margpr": "margin_premium",
+    "mars": "margin_standard",
+    "marp": "margin_plus",
+    "marpr": "margin_premium",
     "module-0-margin-standard": "margin_standard",
     "module-0-margin-plus": "margin_plus",
     "module-0-margin-premium": "margin_premium",
 
-    # Project CF
+    # ===== Project CF =====
     "project_cf": "project_cf",
     "projcf": "project_cf",
     "module-0-project-cf": "project_cf",
 
-    # Report
+    # ===== Report =====
     "report_standard": "report_standard",
     "report_plus": "report_plus",
     "report_premium": "report_premium",
     "reps": "report_standard",
     "repp": "report_plus",
-    "repr": "report_premium",
+    "reppr": "report_premium",
     "module-0-report-standard": "report_standard",
     "module-0-report-plus": "report_plus",
     "module-0-report-premium": "report_premium",
 
-    # Revenue
+    # ===== Revenue =====
     "revenue_standard": "revenue_standard",
     "revenue_intermediate": "revenue_intermediate",
     "revenue_advance": "revenue_advance",
     "revs": "revenue_standard",
-    "revi": "revenue_intermediate",
-    "reva": "revenue_advance",
+    "revp": "revenue_intermediate",
+    "revpr": "revenue_advance",
     "module-0-revenue-standard": "revenue_standard",
     "module-0-revenue-intermediate": "revenue_intermediate",
     "module-0-revenue-advance": "revenue_advance",
 
-    # Single CF
+    # ===== Single CF =====
     "single_cf": "single_cf",
     "scf": "single_cf",
     "module-0-single-cf": "single_cf",
 
-    # Variance
+    # ===== Variance =====
     "variance_standard": "variance_standard",
     "variance_plus": "variance_plus",
     "variance_premium": "variance_premium",
@@ -125,7 +125,22 @@ AGENT_SKU_TO_AGENT = {
     "module-0-variance-standard": "variance_standard",
     "module-0-variance-plus": "variance_plus",
     "module-0-variance-premium": "variance_premium",
+
+    # ===== Copilot Enterprise SKUs =====
+    "en_standard": "ENTERPRISE_LICENSE_STANDARD",
+    "en_professional": "ENTERPRISE_LICENSE_PRO",
+    "en_unlimited": "ENTERPRISE_LICENSE_UNLIMITED",
 }
+
+
+# --- Extend dynamically with Gemini + Copilot suffixes ---
+_extended = {}
+for sku, agent in list(AGENT_SKU_TO_AGENT.items()):
+    if not sku.startswith("en_"):  # don't suffix enterprise SKUs
+        _extended[f"{sku}_gemini"] = agent
+        _extended[f"{sku}_ms"] = agent
+AGENT_SKU_TO_AGENT.update(_extended)
+
 
 def get_agent_slug_from_sku(sku: str):
     if not sku:

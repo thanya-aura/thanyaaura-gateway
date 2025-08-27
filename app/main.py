@@ -1,4 +1,5 @@
-# main.py
+# main.py – extended for GPT + Gemini + Copilot (incl. enterprise SKUs, platform-aware)
+
 import os
 import re
 import json
@@ -26,7 +27,7 @@ except Exception as ex_generic:
     get_agent_slug_from_sku = None
     AGENT_SKU_TO_AGENT = {}
 
-# ===== FULL FALLBACK (33 agents) =====
+# ===== FULL FALLBACK (33 base agents) =====
 _BASE_FALLBACK = {
     # Cashflow (3) + aliases
     "cfs": "SINGLE_CF_AI_AGENT", "cfp": "PROJECT_CF_AI_AGENT", "cfpr": "ENTERPRISE_CF_AI_AGENT",
@@ -62,9 +63,21 @@ _BASE_FALLBACK = {
     "decs": "DECISION_STANDARD", "decp": "DECISION_PLUS", "decpr": "DECISION_PREMIUM",
     "decision_standard": "DECISION_STANDARD", "decision_plus": "DECISION_PLUS", "decision_premium": "DECISION_PREMIUM",
 }
+
+# Copy to fallback and extend
 FALLBACK_SKU_TO_AGENT = dict(_BASE_FALLBACK)
 for k, v in list(_BASE_FALLBACK.items()):
     FALLBACK_SKU_TO_AGENT[f"module-0-{k}"] = v
+    # Add Gemini and Copilot variants
+    FALLBACK_SKU_TO_AGENT[f"{k}_gemini"] = v
+    FALLBACK_SKU_TO_AGENT[f"{k}_ms"] = v
+
+# Add enterprise Copilot SKUs
+FALLBACK_SKU_TO_AGENT.update({
+    "en_standard": "ENTERPRISE_LICENSE_STANDARD",
+    "en_professional": "ENTERPRISE_LICENSE_PRO",
+    "en_unlimited": "ENTERPRISE_LICENSE_UNLIMITED",
+})
 
 # ===== Tier SKUs =====
 _BASE_TIER = {
@@ -75,7 +88,7 @@ TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
     TIER_SKU_TO_CODE[f"module-0-{k}"] = v
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.5.0")
+app = FastAPI(title="Thanyaaura Gateway", version="1.7.0")
 
 # ----------------------
 # Helpers
@@ -95,11 +108,22 @@ def derive_sku_from_url(url_str: str | None) -> str | None:
         return None
 
 def derive_sku(data: dict) -> str | None:
-    sku = data.get("sku") or data.get("passthrough[sku]")
+    sku = data.get("sku") or data.get("passthrough[sku]") or data.get("passthrough") or None
     if sku:
         return _drop_module0(sku)
     f_url = data.get("fulfillment[url]") or data.get("fulfillment_url") or data.get("fulfillment")
     return derive_sku_from_url(f_url)
+
+def derive_platform(sku: str) -> str:
+    if not sku:
+        return "unknown"
+    if sku.endswith("_gemini"):
+        return "Gemini"
+    if sku.endswith("_ms"):
+        return "Copilot"
+    if sku.startswith("en_"):
+        return "Copilot-Enterprise"
+    return "GPT"
 
 def _resolve_with_table(sku: str) -> str | None:
     if not isinstance(AGENT_SKU_TO_AGENT, dict) or not AGENT_SKU_TO_AGENT:
@@ -171,6 +195,7 @@ async def debug_resolve(sku: str):
         "sku_in": sku,
         "agent_slug": resolve_agent_slug(sku),
         "tier_code": resolve_tier_code(sku),
+        "platform": derive_platform(sku),
     }
 
 @app.get("/debug/sku-keys")
@@ -244,7 +269,7 @@ async def billing_thrivecart(request: Request):
 
     tier_code = resolve_tier_code(sku)
     agent_slug = None if tier_code else resolve_agent_slug(sku)
-    if not tier_code and not agent_slug:
+    if not tier_code and not agent_slug and not sku.startswith("en_"):
         raise HTTPException(status_code=400, detail=f"Unknown SKU: {sku}")
 
     order_id = data.get("order_id") or data.get("invoice_id")
@@ -253,20 +278,24 @@ async def billing_thrivecart(request: Request):
         raise HTTPException(status_code=400, detail="Missing order_id or customer[email]")
 
     short_sku = _drop_module0(sku)
+    platform = derive_platform(short_sku)
 
     dbmod = _db()
     try:
-        if tier_code:
-            await run_in_threadpool(dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code)
+        if sku.startswith("en_"):
+            await run_in_threadpool(dbmod.upsert_enterprise_license, order_id, email, short_sku, agent_slug, platform)
+        elif tier_code:
+            await run_in_threadpool(dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code, platform)
         else:
-            await run_in_threadpool(dbmod.upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug)
+            await run_in_threadpool(dbmod.upsert_subscription_and_entitlement, order_id, email, short_sku, agent_slug, platform)
     except Exception as ex_db:
         raise HTTPException(status_code=500, detail=f"DB error: {ex_db}")
 
     return {
         "ok": True,
         "sku": short_sku,
-        "type": "TIER" if tier_code else "AGENT",
+        "platform": platform,
+        "type": "ENTERPRISE" if sku.startswith("en_") else "TIER" if tier_code else "AGENT",
         "tier_code": tier_code,
         "agent_slug": agent_slug,
         "event": data.get("event"),
