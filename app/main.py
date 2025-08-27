@@ -302,3 +302,12 @@ async def billing_thrivecart(request: Request):
         "order_id": order_id,
         "email": email,
     }
+
+# Ensure permanent admin exists on startup
+@app.on_event("startup")
+async def ensure_admin_on_startup():
+    try:
+        dbmod = importlib.import_module("app.db")
+        await run_in_threadpool(dbmod.ensure_permanent_admin_user)
+    except Exception as ex:
+        log.warning("Could not ensure permanent admin user: %s", ex)

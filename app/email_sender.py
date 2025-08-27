@@ -1,66 +1,73 @@
 import os
 import smtplib
-from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from jinja2 import Environment, FileSystemLoader
+from datetime import datetime
 
-
+# Email setup
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
-SMTP_USER = os.environ.get("SMTP_USER", "your_email@example.com")
-SMTP_PASS = os.environ.get("SMTP_PASS", "your_password")  # must be set in Render env
+SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
+SMTP_USER = os.environ.get("SMTP_USER")
+SMTP_PASS = os.environ.get("SMTP_PASS")
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "no-reply@thanyaaura.com")
 
+# Jinja2 env for templates
+env = Environment(loader=FileSystemLoader("app/templates"))
 
-def send_email(recipient: str, subject: str, html_content: str) -> bool:
-    """
-    Send an email with HTML content.
-    """
-    msg = MIMEMultipart("alternative")
-    msg["From"] = SMTP_USER
-    msg["To"] = recipient
+# -------------- Helper --------------
+def render_template(template_name: str, context: dict) -> str:
+    template = env.get_template(template_name)
+    return template.render(**context)
+
+def send_email(to_email: str, subject: str, html_content: str):
+    msg = MIMEText(html_content, "html")
     msg["Subject"] = subject
-
-    msg.attach(MIMEText(html_content, "html"))
+    msg["From"] = FROM_EMAIL
+    msg["To"] = to_email
 
     try:
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, recipient, msg.as_string())
-        return True
+            server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
+            print(f"✅ Email sent to {to_email}: {subject}")
     except Exception as ex:
-        print(f"Email send error: {ex}")
-        return False
+        print(f"❌ Email error to {to_email}: {ex}")
 
-
-def send_platform_email(user: dict, day_offset: int) -> bool:
+# -------------- Send Trial Email --------------
+def send_trial_email(day: int, user, agent_name: str, links: dict):
     """
-    Send a platform-specific onboarding email.
-    user: dict containing {"user_email": ..., "platform": ...}
-    day_offset: int (0=Day 1, 14=Day 14, 27=Day 27)
+    Send trial emails on day 1, 10, 23.
+    Skip if user is the permanent admin account.
     """
-    email = user.get("user_email")
-    platform = (user.get("platform") or "GPT").strip()
+    # Skip admin user
+    if user["user_email"].lower() == "thanyaaura@email.com":
+        print(f"⚠️ Skipping trial email for permanent admin {user['user_email']}")
+        return
 
-    # Choose subject & content by platform
-    if platform == "Gemini":
-        subject = f"[Day {day_offset}] Welcome to Gemini Finance Agent!"
-        html = f"""
-        <p>Hello,</p>
-        <p>Thanks for joining via <b>Gemini</b>. Today is Day {day_offset} of your journey.</p>
-        <p>Here’s how to make the most of your Gemini integration with Finance Agent.</p>
-        """
-    elif platform.startswith("Copilot"):
-        subject = f"[Day {day_offset}] Welcome to Microsoft Copilot Finance Agent!"
-        html = f"""
-        <p>Hello,</p>
-        <p>Welcome aboard <b>Microsoft Copilot</b> Finance Agent. Today is Day {day_offset} of your subscription.</p>
-        <p>Your enterprise-level insights are ready to explore.</p>
-        """
-    else:
-        subject = f"[Day {day_offset}] Welcome to GPT Finance Agent!"
-        html = f"""
-        <p>Hello,</p>
-        <p>Thanks for signing up through <b>GPT</b>. This is Day {day_offset} of your subscription.</p>
-        <p>Let’s get started with your Finance Agent tools today.</p>
-        """
+    # Map templates + subjects
+    template_map = {
+        1: ("email_day1.html", "Welcome to your Finance AI Agent – Day 1"),
+        10: ("email_day10.html", "Case Study & Tips – Day 10"),
+        23: ("email_day23.html", "Executive Insights – Day 23"),
+    }
 
-    return send_email(email, subject, html)
+    if day not in template_map:
+        print(f"⚠️ No template for Day {day}")
+        return
+
+    template_file, subject = template_map[day]
+
+    # Build context
+    context = {
+        "first_name": user.get("first_name", "there"),
+        "agent_name": agent_name,
+        "platform": user.get("platform", "GPT"),
+        "gpt_link": links.get("gpt_link"),
+        "gemini_link": links.get("gemini_link"),
+        "copilot_link": links.get("copilot_link"),
+        "upgrade_link": links.get("upgrade_link"),
+    }
+
+    html_content = render_template(template_file, context)
+    send_email(user["user_email"], subject, html_content)

@@ -1,7 +1,6 @@
 import os
 import psycopg
 from psycopg.rows import dict_row
-from datetime import datetime
 
 # Database connection helper
 def _connect():
@@ -28,56 +27,50 @@ def ping_db():
         return False
 
 # ---------- Subscriptions ----------
-def upsert_subscription_and_entitlement(order_id: str, user_email: str, sku: str, agent_slug: str, platform: str, status: str = "active"):
+def upsert_subscription_and_entitlement(user_email: str, sku: str, platform: str, status: str = "active"):
     """
-    Store subscription for a specific agent (GPT/Gemini/Copilot).
-    Uses id as unique key (tc-agent-{sku}).
+    Store subscription for a specific agent or 'all' entitlement.
     """
     sql = """
-        INSERT INTO subscriptions (id, order_id, user_email, sku, agent_slug, platform, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, now(), now())
+        INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, now(), now())
         ON CONFLICT (id)
-        DO UPDATE SET agent_slug = EXCLUDED.agent_slug,
-                      platform   = EXCLUDED.platform,
+        DO UPDATE SET platform   = EXCLUDED.platform,
                       status     = EXCLUDED.status,
                       updated_at = now();
     """
-    db_id = f"tc-agent-{sku}"
-    return _upsert(sql, (db_id, order_id, user_email, sku, agent_slug, platform, status))
+    sub_id = f"tc-agent-{sku}-{platform}".lower()
+    return _upsert(sql, (sub_id, user_email, sku, platform, status))
 
-def upsert_tier_subscription(order_id: str, user_email: str, sku: str, tier: str, platform: str, status: str = "active"):
+def upsert_tier_subscription(user_email: str, sku: str, tier: str, platform: str, status: str = "active"):
     """
     Store subscription for a tier plan (Standard / Plus / Premium).
-    Uses id as unique key (tc-tier-{sku}).
     """
     sql = """
-        INSERT INTO subscriptions (id, order_id, user_email, sku, tier, platform, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, now(), now())
+        INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, now(), now())
         ON CONFLICT (id)
-        DO UPDATE SET tier       = EXCLUDED.tier,
-                      platform   = EXCLUDED.platform,
+        DO UPDATE SET platform   = EXCLUDED.platform,
                       status     = EXCLUDED.status,
                       updated_at = now();
     """
-    db_id = f"tc-tier-{sku}"
-    return _upsert(sql, (db_id, order_id, user_email, sku, tier, platform, status))
+    sub_id = f"tc-tier-{tier}-{platform}".lower()
+    return _upsert(sql, (sub_id, user_email, sku, platform, status))
 
-def upsert_enterprise_license(order_id: str, user_email: str, sku: str, license_type: str, platform: str, status: str = "active"):
+def upsert_enterprise_license(user_email: str, sku: str, license_type: str, platform: str, status: str = "active"):
     """
     Store Copilot enterprise license (en_standard, en_professional, en_unlimited).
-    Uses id as unique key (tc-ent-{sku}).
     """
     sql = """
-        INSERT INTO subscriptions (id, order_id, user_email, sku, tier, platform, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, now(), now())
+        INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, now(), now())
         ON CONFLICT (id)
-        DO UPDATE SET tier       = EXCLUDED.tier,
-                      platform   = EXCLUDED.platform,
+        DO UPDATE SET platform   = EXCLUDED.platform,
                       status     = EXCLUDED.status,
                       updated_at = now();
     """
-    db_id = f"tc-ent-{sku}"
-    return _upsert(sql, (db_id, order_id, user_email, sku, license_type, platform, status))
+    sub_id = f"tc-enterprise-{license_type}-{platform}".lower()
+    return _upsert(sql, (sub_id, user_email, sku, platform, status))
 
 def cancel_subscription(user_email: str, sku: str = None):
     """
@@ -106,18 +99,37 @@ def fetch_subscriptions(user_email: str):
 def fetch_effective_agents(user_email: str):
     """
     Return active agent entitlements for a user.
+    If sku = 'all', return all 33 agents.
     """
     sql = """
-        SELECT agent_slug
+        SELECT sku, platform, status
           FROM subscriptions
          WHERE user_email = %s
-           AND status = 'active'
-           AND agent_slug IS NOT NULL
+           AND status = 'active';
     """
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql, (user_email,))
-            return [row["agent_slug"] for row in cur.fetchall()]
+            rows = cur.fetchall()
+
+            # If permanent "all" entitlement is found, return all agents
+            for row in rows:
+                if row["sku"] == "all":
+                    return [
+                        "budget_standard", "budget_plus", "budget_premium",
+                        "capex_standard", "capex_plus", "capex_premium",
+                        "cost_standard", "cost_plus", "cost_premium",
+                        "decision_standard", "decision_plus", "decision_premium",
+                        "enterprise_cf", "project_cf", "single_cf",
+                        "forecast_standard", "forecast_plus", "forecast_premium",
+                        "fx_standard", "fx_plus", "fx_premium",
+                        "margin_standard", "margin_plus", "margin_premium",
+                        "report_standard", "report_plus", "report_premium",
+                        "revenue_standard", "revenue_intermediate", "revenue_advance",
+                        "variance_standard", "variance_plus", "variance_premium",
+                    ]
+            # Otherwise return only entitled agents
+            return [row["sku"] for row in rows if row["sku"] != "all"]
     except Exception as ex:
         print(f"DB error: {ex}")
         return []
@@ -126,7 +138,7 @@ def fetch_effective_agents(user_email: str):
 def get_trial_users_by_day(day_offset: int = 0):
     """
     Return list of trial users that started exactly `day_offset` days ago.
-    Includes platform for platform-aware emails.
+    Example: day_offset=0 -> today, 1 -> yesterday, etc.
     """
     sql = """
         SELECT user_email, created_at, platform
@@ -139,9 +151,34 @@ def get_trial_users_by_day(day_offset: int = 0):
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql, (day_offset,))
             return cur.fetchall()
-    except Exception as ex:
-        print(f"DB error: {ex}")
+    except Exception:
         return []
+
+def ensure_permanent_admin_user():
+    """
+    Ensure thanyaaura@email.com always has permanent 'all' subscriptions
+    across GPT, Gemini, and Copilot.
+    """
+    sql = """
+        INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
+        VALUES
+            ('perm-gpt-all', 'thanyaaura@email.com', 'all', 'GPT', 'active', now(), now()),
+            ('perm-gemini-all', 'thanyaaura@email.com', 'all', 'Gemini', 'active', now(), now()),
+            ('perm-copilot-all', 'thanyaaura@email.com', 'all', 'Copilot', 'active', now(), now())
+        ON CONFLICT (id)
+        DO UPDATE SET platform   = EXCLUDED.platform,
+                      status     = 'active',
+                      updated_at = now();
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql)
+            conn.commit()
+            print("✅ Permanent admin user ensured in DB")
+            return True
+    except Exception as ex:
+        print(f"DB error ensuring permanent admin user: {ex}")
+        return False
 
 __all__ = [
     "ping_db",
