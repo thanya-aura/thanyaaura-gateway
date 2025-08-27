@@ -1,256 +1,205 @@
 # app/enterprise_access.py
-import os
-import re
-from typing import Optional
+from typing import Optional, List, Dict, Any
+from app import db
 
-from app import db  # ใช้ fast-path เดิมของคุณ
-import psycopg      # เพิ่ม fallback DB ตรวจสิทธิ์ตรง
-
-# คงของเดิม
+# --- แผน Enterprise แบบโดเมน ---
 ENTERPRISE_SKUS = {"en_standard", "en_professional", "en_unlimited"}
 
+# --- พยายามใช้ตาราง map จากไฟล์ agents ถ้ามี; ถ้าไม่มี ใช้ fallback ชุดหลัก ---
+try:
+    # ควรมี AGENT_SKU_TO_AGENT = {"cfs": "SINGLE_CF_AI_AGENT", ...}
+    from app.agents import AGENT_SKU_TO_AGENT as _SKU2SLUG  # type: ignore
+except Exception:
+    _SKU2SLUG = {
+        # core (ย่อบางส่วนพอให้ครอบคลุม agent หลัก)
+        "cfs": "SINGLE_CF_AI_AGENT",
+        "cfp": "PROJECT_CF_AI_AGENT",
+        "cfpr": "ENTERPRISE_CF_AI_AGENT",
+        "revs": "REVENUE_STANDARD",
+        "revp": "REVENUE_INTERMEDIATE",
+        "revpr": "REVENUE_ADVANCE",
+        "capexs": "CAPEX_STANDARD",
+        "capexp": "CAPEX_PLUS",
+        "capexpr": "CAPEX_PREMIUM",
+        "fxs": "FX_STANDARD",
+        "fxp": "FX_PLUS",
+        "fxpr": "FX_PREMIUM",
+        "costs": "COST_STANDARD",
+        "costp": "COST_PLUS",
+        "costpr": "COST_PREMIUM",
+        "buds": "BUDGET_STANDARD",
+        "budp": "BUDGET_PLUS",
+        "budpr": "BUDGET_PREMIUM",
+        "reps": "REPORT_STANDARD",
+        "repp": "REPORT_PLUS",
+        "reppr": "REPORT_PREMIUM",
+        "vars": "VARIANCE_STANDARD",
+        "varp": "VARIANCE_PLUS",
+        "varpr": "VARIANCE_PREMIUM",
+        "mars": "MARGIN_STANDARD",
+        "marp": "MARGIN_PLUS",
+        "marpr": "MARGIN_PREMIUM",
+        "fors": "FORECAST_STANDARD",
+        "forp": "FORECAST_PLUS",
+        "forpr": "FORECAST_PREMIUM",
+        "decs": "DECISION_STANDARD",
+        "decp": "DECISION_PLUS",
+        "decpr": "DECISION_PREMIUM",
+        # enterprise license (by domain)
+        "en_standard": "ENTERPRISE_LICENSE_STANDARD",
+        "en_professional": "ENTERPRISE_LICENSE_PRO",
+        "en_unlimited": "ENTERPRISE_LICENSE_UNLIMITED",
+    }
+
+# ทำ inverse map: slug -> {skus...} (รองรับ module-0-*, *_gemini, *_ms)
+_AGENT2SKUS: Dict[str, set] = {}
+for sku, slug in (_SKU2SLUG or {}).items():
+    s = sku.lower()
+    if s.startswith("module-0-"):
+        s = s[9:]
+    _AGENT2SKUS.setdefault(slug, set()).add(s)
+    _AGENT2SKUS[slug].add(f"{s}_gemini")
+    _AGENT2SKUS[slug].add(f"{s}_ms")
+
+# ---------- helpers ----------
 def _email_domain(email: str) -> Optional[str]:
     try:
         return email.split("@", 1)[1].lower()
     except Exception:
         return None
 
-def _tier_from_slug(agent_slug: str) -> Optional[str]:
+def _normalize_platform(p: Optional[str]) -> str:
     """
-    แยกระดับเอเจนต์จาก slug ภายในระบบ เช่น:
-    - *_STANDARD      -> STANDARD
-    - *_PLUS          -> PLUS
-    - *_INTERMEDIATE  -> PLUS   (map มาที่ PLUS)
-    - *_PREMIUM       -> PREMIUM
-    - *_ADVANCE       -> PREMIUM (map)
+    ทำให้ชื่อแพลตฟอร์มสม่ำเสมอ:
+    - "Copilot-Enterprise" → "Copilot"
+    - ค่าว่าง → "GPT" (ตั้ง default)
+    """
+    s = (p or "").strip()
+    if s.startswith("Copilot"):
+        return "Copilot"
+    return s or "GPT"
+
+def _platform_match(request_platform: str, row_platform: Optional[str]) -> bool:
+    return _normalize_platform(request_platform) == _normalize_platform(row_platform)
+
+def _tier_from_slug(agent_slug: str) -> str:
+    """
+    Map slug → tier ที่ต้องใช้:
+    *_STANDARD / (default)   -> STANDARD
+    *_PLUS / *_INTERMEDIATE  -> PLUS
+    *_PREMIUM / *_ADVANCE    -> PREMIUM
     """
     s = (agent_slug or "").upper()
-    if s.endswith("_STANDARD"):
-        return "STANDARD"
-    if s.endswith("_PLUS") or s.endswith("_INTERMEDIATE"):
-        return "PLUS"
     if s.endswith("_PREMIUM") or s.endswith("_ADVANCE"):
         return "PREMIUM"
-    return None
+    if s.endswith("_PLUS") or s.endswith("_INTERMEDIATE"):
+        return "PLUS"
+    return "STANDARD"
 
-def _platform_match(request_platform: str, row_platform: str) -> bool:
+_TIER_ORDER = {"STANDARD": 0, "PLUS": 1, "PREMIUM": 2}
+
+def _tier_allows(owned: str, required: str) -> bool:
+    return _TIER_ORDER.get((owned or "").upper(), -1) >= _TIER_ORDER.get((required or "").upper(), 0)
+
+def _best_owned_tier(rows: List[Dict[str, Any]], platform: str) -> Optional[str]:
     """
-    Copilot-Enterprise นับเป็น Copilot ด้วย
+    หา tier สูงสุดของผู้ใช้บนแพลตฟอร์มที่ระบุ จากตาราง tier_subscriptions
+    รองรับคีย์หลายรูปแบบ: 'tier', 'tier_code', หรือ 'sku' (เช่น PLUS)
     """
-    rp = (request_platform or "").strip()
-    rp = "Copilot" if rp.startswith("Copilot") else rp
-    lp = (row_platform or "").strip()
-    lp = "Copilot" if lp.startswith("Copilot") else lp
-    # ถ้า request_platform ว่าง ให้ถือเป็น wildcard (ใช้กับ fallback query)
-    return (rp == "" or rp == lp)
+    best_tier = None
+    best_rank = -1
+    for r in rows or []:
+        if r.get("status", "active") != "active":
+            continue
+        if not _platform_match(platform, r.get("platform")):
+            continue
+        raw = (r.get("tier") or r.get("tier_code") or r.get("sku") or "").upper()
+        if raw.startswith("TIER_"):
+            raw = raw[5:]
+        rank = _TIER_ORDER.get(raw, -1)
+        if rank > best_rank:
+            best_rank = rank
+            best_tier = raw
+    return best_tier
 
-# ------------------------------
-# Fallback DB helpers (ใหม่)
-# ------------------------------
-def _db_url() -> Optional[str]:
-    return os.getenv("DATABASE_URL") or os.getenv("DB_URL")
-
-def _connect():
-    url = _db_url()
-    if not url:
-        return None
-    try:
-        return psycopg.connect(url, autocommit=True)
-    except Exception:
-        return None
-
-def _exists(cur, sql: str, params: tuple) -> bool:
-    cur.execute(sql, params)
-    return cur.fetchone() is not None
-
-def _has_agent_entitlement_email(email: str, agent_slug_or_sku: str, platform: str) -> bool:
+def _agent_skus_for_slug(agent_slug: str) -> List[str]:
     """
-    ตรวจในตาราง entitlements (email-level)
-    - พยายามเช็ค agent_slug ก่อน ถ้า schema ใช้ sku ก็เช็คซ้ำให้
+    คืนชุด sku ที่ถือว่าเป็น agent เดียวกับ slug นี้ (รวม alias พวก *_gemini, *_ms)
+    ถ้าไม่มีในตาราง จะคืน [] เพื่อให้ตรวจแบบ row['agent_slug'] ตรงตัวแทน
     """
-    conn = _connect()
-    if not conn:
-        return False
-    try:
-        with conn, conn.cursor() as cur:
-            # agent_slug
-            try:
-                if _exists(
-                    cur,
-                    """
-                    SELECT 1 FROM entitlements
-                    WHERE LOWER(email)=LOWER(%s)
-                      AND LOWER(agent_slug)=LOWER(%s)
-                      AND LOWER(platform)=LOWER(%s)
-                    LIMIT 1
-                    """,
-                    (email, agent_slug_or_sku, platform),
-                ):
-                    return True
-            except Exception:
-                pass
+    return sorted(list(_AGENT2SKUS.get(agent_slug, set())))
 
-            # sku
-            try:
-                if _exists(
-                    cur,
-                    """
-                    SELECT 1 FROM entitlements
-                    WHERE LOWER(email)=LOWER(%s)
-                      AND LOWER(sku)=LOWER(%s)
-                      AND LOWER(platform)=LOWER(%s)
-                    LIMIT 1
-                    """,
-                    (email, agent_slug_or_sku, platform),
-                ):
-                    return True
-            except Exception:
-                pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-    return False
-
-def _has_any_tier_for_platform(email: str, platform: str) -> bool:
-    """
-    ตรวจในตาราง tier_subscriptions ว่ามี record สำหรับ email+platform ไหม
-    (ระหว่างทดสอบ อนุญาตทุก agent หากมี tier ใด ๆ บน platform นั้น)
-    """
-    conn = _connect()
-    if not conn:
-        return False
-    try:
-        with conn, conn.cursor() as cur:
-            try:
-                return _exists(
-                    cur,
-                    """
-                    SELECT 1 FROM tier_subscriptions
-                    WHERE LOWER(email)=LOWER(%s)
-                      AND LOWER(platform)=LOWER(%s)
-                    LIMIT 1
-                    """,
-                    (email, platform),
-                )
-            except Exception:
-                return False
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-def _has_enterprise_email(email: str, platform: str) -> bool:
-    """
-    ตรวจในตาราง enterprise_licenses ที่ผูกกับ email โดยตรง
-    """
-    conn = _connect()
-    if not conn:
-        return False
-    try:
-        with conn, conn.cursor() as cur:
-            try:
-                return _exists(
-                    cur,
-                    """
-                    SELECT 1 FROM enterprise_licenses
-                    WHERE LOWER(email)=LOWER(%s)
-                      AND LOWER(platform)=LOWER(%s)
-                    LIMIT 1
-                    """,
-                    (email, platform),
-                )
-            except Exception:
-                return False
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-# ------------------------------
-# Main checker
-# ------------------------------
+# ---------- main gate ----------
 def check_entitlement(user_email: str, agent_slug: str, platform: str) -> bool:
     """
-    คืน True ถ้า user มีสิทธิ์เรียก agent_slug บน platform ที่ระบุ
+    คืน True ถ้าผู้ใช้มีสิทธิ์เรียก agent_slug บน platform ที่ระบุ
 
-    ลำดับกติกา (รวม fast-path เดิม + fallback DB):
-    1) สิทธิ์รายบุคคล (fast-path: db.fetch_subscriptions)
-       - ถ้ามีแถว sku='all' บน platform เดียวกัน -> ผ่าน
-       - (สามารถต่อยอด map agent_slug -> sku แล้วเทียบราย agent ได้ในอนาคต)
-    2) Fallback email-level:
-       - entitlements(email, agent_slug/sku, platform) -> ผ่าน
-       - tier_subscriptions(email, platform)           -> ผ่าน (อนุญาตทุก agent ชั่วคราว)
-       - enterprise_licenses(email, platform)          -> ผ่าน
-    3) สิทธิ์ enterprise แบบโดเมน (เดิม):
-       - ใช้ได้เฉพาะ Copilot (รวม Copilot-Enterprise)
-       - en_standard      -> เรียกได้เฉพาะเอเจนต์ tier STANDARD
-       - en_professional  -> เรียกได้ทุก tier
-       - en_unlimited     -> เรียกได้ทุก tier
+    ลำดับพิจารณา (รองรับทุกแพลตฟอร์ม รวม Copilot แบบรายบุคคล):
+    1) รายบุคคล - subscriptions:
+       - ถ้ามี sku='all' และ platform ตรงกัน -> อนุญาตทุก agent บน platform นั้น
+       - ถ้ามี row ที่ระบุ agent โดยตรง (agent_slug/agent/agent_id ตรง) -> อนุญาตเฉพาะเอเจนต์นั้น
+       - ถ้ามี sku ที่ match กับ agent_slug (จากตาราง map) + platform ตรง -> อนุญาตเอเจนต์นั้น
+    2) รายบุคคล - tier_subscriptions:
+       - STANDARD อนุญาตเฉพาะเอเจนต์ที่ต้องการ STANDARD
+       - PLUS     อนุญาต STANDARD + PLUS
+       - PREMIUM  อนุญาตทั้งหมด
+       (ใช้กับ GPT/Gemini/Copilot ได้เท่าเทียมกัน โดยดู platform ตรงกัน)
+    3) Enterprise (โดเมน) - เฉพาะ Copilot:
+       - en_standard      -> เฉพาะเอเจนต์ที่ต้องการ STANDARD
+       - en_professional  -> ทุก tier
+       - en_unlimited     -> ทุก tier
     """
-    # ---------- 1) fast-path บนตาราง subscriptions ของผู้ใช้ ----------
-    try:
-        rows = db.fetch_subscriptions(user_email) or []
-        rows = [r for r in rows if (r.get("status") == "active")]
-        for r in rows:
-            if r.get("sku") == "all" and _platform_match(platform, r.get("platform") or ""):
-                return True
-        # NOTE: ถ้าต้องการเช็ค per-agent report จาก subscriptions เพิ่ม:
-        # - ทำ mapping agent_slug -> sku แล้วเช็ค r["sku"] == mapped_sku และ platform ตรงกัน
-    except Exception:
-        # ถ้า fast-path error ให้ไป fallback ต่อ
-        pass
+    platform = _normalize_platform(platform)
 
-    # ---------- 2) fallback email-level (ตาราง entitlements / tier_subscriptions / enterprise_licenses) ----------
-    # 2.1 agent-level entitlements (email)
+    # --- 1) รายบุคคล: subscriptions ---
     try:
-        if _has_agent_entitlement_email(user_email, agent_slug, platform):
+        subs = db.fetch_subscriptions(user_email) or []
+    except Exception:
+        subs = []
+
+    agent_required_tier = _tier_from_slug(agent_slug)
+    skus_for_agent = set(_agent_skus_for_slug(agent_slug))
+
+    for r in subs:
+        if r.get("status", "active") != "active":
+            continue
+        if not _platform_match(platform, r.get("platform")):
+            continue
+
+        sku = (r.get("sku") or "").lower()
+        if sku == "all":
+            return True  # ทั้ง platform
+
+        # ผูก agent รายตัวด้วย slug โดยตรง ถ้าตารางมีเก็บไว้
+        row_agent_slug = r.get("agent_slug") or r.get("agent") or r.get("agent_id")
+        if row_agent_slug and str(row_agent_slug).upper() == agent_slug.upper():
             return True
-    except Exception:
-        pass
 
-    # 2.2 tier subscriptions (email) — อนุญาตทุก agent หากพบ tier บน platform เดียวกัน
-    try:
-        if _has_any_tier_for_platform(user_email, platform):
+        # หรือผูกด้วย sku ของ agent (จากตาราง map)
+        if sku and (sku in skus_for_agent or sku.replace("module-0-", "") in skus_for_agent):
             return True
-    except Exception:
-        pass
 
-    # 2.3 enterprise licenses (email)
+    # --- 2) รายบุคคล: tier_subscriptions ---
     try:
-        if _has_enterprise_email(user_email, platform):
-            return True
+        tier_rows = db.fetch_tier_subscriptions(user_email) or []
     except Exception:
-        pass
+        tier_rows = []
 
-    # ---------- 3) enterprise domain license (เดิม) เฉพาะ Copilot* ----------
-    if not (platform or "").startswith("Copilot"):
-        return False
-
-    domain = _email_domain(user_email)
-    if not domain:
-        return False
-
-    try:
-        ent = db.get_active_enterprise_license_for_domain(domain)
-    except Exception:
-        ent = None
-
-    if not ent:
-        return False  # ไม่มี license active ของโดเมนนี้
-
-    if not _platform_match(platform, ent.get("platform") or ""):
-        return False
-
-    lic = (ent.get("sku") or "").lower()
-    agent_tier = _tier_from_slug(agent_slug) or "STANDARD"  # default ให้ปลอดภัยสุด
-
-    if lic == "en_standard":
-        return agent_tier == "STANDARD"
-    if lic in ("en_professional", "en_unlimited"):
+    owned_tier = _best_owned_tier(tier_rows, platform)  # เช่น 'PLUS'
+    if owned_tier and _tier_allows(owned_tier, agent_required_tier):
         return True
 
+    # --- 3) Enterprise license (เฉพาะ Copilot) ---
+    if platform == "Copilot":
+        domain = _email_domain(user_email)
+        if domain:
+            ent = db.get_active_enterprise_license_for_domain(domain)
+            if ent and _platform_match(platform, ent.get("platform")):
+                lic = (ent.get("sku") or "").lower()
+                if lic == "en_standard":
+                    return agent_required_tier == "STANDARD"
+                if lic in ("en_professional", "en_unlimited"):
+                    return True
+
+    # ไม่ผ่านเงื่อนไขใด ๆ
     return False
