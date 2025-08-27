@@ -15,21 +15,19 @@ env = Environment(loader=FileSystemLoader("app/templates"))
 
 # -------------- Helper --------------
 def render_template(template_name: str, context: dict) -> str:
-    """Render HTML from template and clean unsafe characters."""
     template = env.get_template(template_name)
     html = template.render(**context)
-    # Replace non-breaking spaces and enforce plain spaces
+    # Clean possible non-breaking spaces
     return html.replace("\xa0", " ")
 
 def send_email(to_email: str, subject: str, html_content: str):
-    """Send an email with proper UTF-8 encoding."""
-    try:
-        # Explicitly encode in UTF-8
-        msg = MIMEText(html_content.encode("utf-8"), "html", "utf-8")
-        msg["Subject"] = str(subject)
-        msg["From"] = FROM_EMAIL
-        msg["To"] = to_email
+    # Force UTF-8 encoding for subject and body
+    msg = MIMEText(html_content, "html", "utf-8")
+    msg["Subject"] = str(subject).replace("\xa0", " ")
+    msg["From"] = FROM_EMAIL
+    msg["To"] = to_email
 
+    try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
