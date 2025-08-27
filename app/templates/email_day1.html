@@ -14,10 +14,10 @@
     <p>Your <b>GPT Finance Agent</b> is ready! Click below to launch:</p>
     <p><a href="{{ gpt_link }}"><b>Launch {{ agent_name|clean }} in GPT Now</b></a></p>
   {% elif platform == "Gemini" %}
-    <p>You’ve joined through <b>Gemini</b>. Your Finance Agent is live and ready:</p>
+    <p>You've joined through <b>Gemini</b>. Your Finance Agent is live and ready:</p>
     <p><a href="{{ gemini_link }}"><b>Access {{ agent_name|clean }} in Gemini</b></a></p>
   {% elif platform.startswith("Copilot") %}
-    <p>You’re onboard with <b>Microsoft Copilot</b>. Your Finance Agent is set up inside Copilot Studio:</p>
+    <p>You're onboard with <b>Microsoft Copilot</b>. Your Finance Agent is set up inside Copilot Studio:</p>
     <p><a href="{{ copilot_link }}"><b>Start {{ agent_name|clean }} in Microsoft Copilot</b></a></p>
   {% endif %}
 
