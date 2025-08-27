@@ -108,7 +108,14 @@ except Exception as e:
     enterprise_api = None
     log.warning("Entitlements modules not loaded (%s). Entitlement endpoints will degrade gracefully.", e)
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.8.0")
+# Enterprise access checker (domain + user + tier logic)
+try:
+    from app.enterprise_access import check_entitlement
+except Exception as e:
+    check_entitlement = None
+    log.warning("enterprise_access.check_entitlement not available (%s).", e)
+
+app = FastAPI(title="Thanyaaura Gateway", version="1.9.0")
 
 # ----------------------
 # Helpers
@@ -190,6 +197,24 @@ def _db():
         raise HTTPException(status_code=500, detail=f"DB module error: {ex_generic}")
 
 # ----------------------
+# Entitlement gate helper
+# ----------------------
+def require_entitlement_or_403(user_email: str, sku: str):
+    """
+    Convert SKU -> agent_slug & platform and check access using enterprise/user logic.
+    Raises 403 if not allowed.
+    """
+    short = _drop_module0(sku)
+    agent_slug = resolve_agent_slug(short) or short.upper()
+    platform = derive_platform(short)
+    if not check_entitlement:
+        # If the checker isn't available, fail-closed to avoid accidental open access.
+        raise HTTPException(status_code=501, detail="Entitlement checker not available.")
+    if not check_entitlement(user_email, agent_slug, platform):
+        raise HTTPException(status_code=403, detail="No entitlement for this agent/platform.")
+    return agent_slug, platform
+
+# ----------------------
 # Routes: basics
 # ----------------------
 @app.get("/")
@@ -198,7 +223,13 @@ async def root():
         "name": "Thanyaaura Gateway",
         "version": getattr(app, "version", None),
         "docs": "/docs",
-        "endpoints_hint": ["/health", "/healthz", "/routes", "/debug/*", "/billing/thrivecart", "/entitlements/{email}", "/entitlements/company/{domain}"],
+        "endpoints_hint": [
+            "/health", "/healthz", "/routes", "/debug/*",
+            "/billing/thrivecart",
+            "/entitlements/{email}",
+            "/entitlements/company/{domain}",
+            "/agents/{sku}/run"
+        ],
     }
 
 @app.get("/health")
@@ -289,6 +320,30 @@ async def entitlements_company(domain: str):
         "copilot": os.getenv("LINK_COPILOT", "https://copilot.microsoft.com/"),
     }
     return ent
+
+# ----------------------
+# Example: run an agent (with entitlement check)
+# ----------------------
+@app.post("/agents/{sku}/run")
+async def run_agent(sku: str, req: Dict[str, Any]):
+    """
+    Minimal demo endpoint:
+    - expects JSON with {"email": "..."} (rename to your actual field if needed)
+    - checks entitlement based on SKU -> agent_slug + platform
+    - returns a stubbed result after access-check
+    """
+    user_email = req.get("email") or req.get("user_email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Missing user email")
+
+    agent_slug, platform = require_entitlement_or_403(user_email, sku)
+
+    # ---- TODO: call your real agent runner here ----
+    # result = await actually_run_agent(agent_slug, req_payload=req, platform=platform)
+    # return {"ok": True, "agent": agent_slug, "platform": platform, "result": result}
+
+    # Stubbed response
+    return {"ok": True, "agent": agent_slug, "platform": platform, "note": "Replace with real agent execution."}
 
 # ----------------------
 # Payload reader
