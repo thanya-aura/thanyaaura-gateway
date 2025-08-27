@@ -19,7 +19,7 @@ def render_template(template_name: str, context: dict) -> str:
     return template.render(**context)
 
 def send_email(to_email: str, subject: str, html_content: str):
-    # Force UTF-8 encoding
+    # Explicitly use UTF-8 to avoid ASCII codec issues
     msg = MIMEText(html_content, "html", "utf-8")
     msg["Subject"] = subject
     msg["From"] = FROM_EMAIL
