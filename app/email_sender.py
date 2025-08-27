@@ -19,7 +19,10 @@ def render_template(template_name: str, context: dict) -> str:
     return template.render(**context)
 
 def send_email(to_email: str, subject: str, html_content: str):
-    # Explicitly use UTF-8 to avoid ASCII codec issues
+    """
+    Send UTF-8 encoded HTML email.
+    """
+    # ensure UTF-8 encoding
     msg = MIMEText(html_content, "html", "utf-8")
     msg["Subject"] = subject
     msg["From"] = FROM_EMAIL
@@ -29,7 +32,8 @@ def send_email(to_email: str, subject: str, html_content: str):
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(FROM_EMAIL, [to_email], msg.as_string())
+            # explicitly encode as utf-8
+            server.sendmail(FROM_EMAIL, [to_email], msg.as_string().encode("utf-8"))
             print(f"✅ Email sent to {to_email}: {subject}")
     except Exception as ex:
         print(f"❌ Email error to {to_email}: {ex}")
