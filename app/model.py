@@ -1,6 +1,6 @@
 # app/models.py
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 
 class RunAgentRequest(BaseModel):
     """
@@ -26,3 +26,5 @@ class RunAgentRequest(BaseModel):
             ]
         },
     )
+
+__all__ = ["RunAgentRequest"]
