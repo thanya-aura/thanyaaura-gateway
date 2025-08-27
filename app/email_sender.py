@@ -15,17 +15,21 @@ env = Environment(loader=FileSystemLoader("app/templates"))
 
 # -------------- Helper --------------
 def render_template(template_name: str, context: dict) -> str:
+    """Render HTML from template and clean unsafe characters."""
     template = env.get_template(template_name)
-    return template.render(**context)
+    html = template.render(**context)
+    # Replace non-breaking spaces and enforce plain spaces
+    return html.replace("\xa0", " ")
 
 def send_email(to_email: str, subject: str, html_content: str):
-    # Force UTF-8 encoding to handle special characters
-    msg = MIMEText(html_content, "html", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = FROM_EMAIL
-    msg["To"] = to_email
-
+    """Send an email with proper UTF-8 encoding."""
     try:
+        # Explicitly encode in UTF-8
+        msg = MIMEText(html_content.encode("utf-8"), "html", "utf-8")
+        msg["Subject"] = str(subject)
+        msg["From"] = FROM_EMAIL
+        msg["To"] = to_email
+
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
@@ -45,6 +49,7 @@ def send_trial_email(day: int, user, agent_name: str, links: dict):
         print(f"⚠️ Skipping trial email for permanent admin {user['user_email']}")
         return
 
+    # Map templates + subjects
     template_map = {
         1: ("email_day1.html", "Welcome to your Finance AI Agent – Day 1"),
         10: ("email_day10.html", "Case Study & Tips – Day 10"),
@@ -57,6 +62,7 @@ def send_trial_email(day: int, user, agent_name: str, links: dict):
 
     template_file, subject = template_map[day]
 
+    # Build context
     context = {
         "first_name": user.get("first_name", "there"),
         "agent_name": agent_name,
