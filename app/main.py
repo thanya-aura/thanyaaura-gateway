@@ -14,11 +14,18 @@ from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
 
 # ---------- logging ----------
-log = logging.getLogger("thanyaaura.gateway")
+def _env_log_level(default: str = "INFO") -> int:
+    """Normalize LOG_LEVEL env (e.g., 'info', 'INFO', '20') to a valid logging level."""
+    lvl = str(os.getenv("LOG_LEVEL", default)).strip()
+    if lvl.isdigit():
+        return int(lvl)
+    return getattr(logging, lvl.upper(), logging.INFO)
+
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level=_env_log_level(),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+log = logging.getLogger("thanyaaura.gateway")
 
 # ---------- agents resolver (optional external table) ----------
 try:
