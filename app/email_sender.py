@@ -2,6 +2,7 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from jinja2 import Environment, FileSystemLoader
+from datetime import datetime
 
 # Email setup
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
@@ -13,17 +14,30 @@ FROM_EMAIL = os.environ.get("FROM_EMAIL", "no-reply@thanyaaura.com")
 # Jinja2 env for templates
 env = Environment(loader=FileSystemLoader("app/templates"))
 
+# Custom filter to sanitize hidden Unicode
+def clean_text(value: str) -> str:
+    if not value:
+        return ""
+    return (
+        value.replace("\xa0", " ")
+             .replace("–", "-")
+             .replace("—", "-")
+             .replace("“", '"')
+             .replace("”", '"')
+             .replace("’", "'")
+    )
+
+env.filters["clean"] = clean_text
+
 # -------------- Helper --------------
 def render_template(template_name: str, context: dict) -> str:
     template = env.get_template(template_name)
     html = template.render(**context)
-    # Clean possible non-breaking spaces
-    return html.replace("\xa0", " ")
+    return clean_text(html)
 
 def send_email(to_email: str, subject: str, html_content: str):
-    # Force UTF-8 encoding for subject and body
     msg = MIMEText(html_content, "html", "utf-8")
-    msg["Subject"] = str(subject).replace("\xa0", " ")
+    msg["Subject"] = subject
     msg["From"] = FROM_EMAIL
     msg["To"] = to_email
 
@@ -47,7 +61,6 @@ def send_trial_email(day: int, user, agent_name: str, links: dict):
         print(f"⚠️ Skipping trial email for permanent admin {user['user_email']}")
         return
 
-    # Map templates + subjects
     template_map = {
         1: ("email_day1.html", "Welcome to your Finance AI Agent – Day 1"),
         10: ("email_day10.html", "Case Study & Tips – Day 10"),
@@ -60,7 +73,6 @@ def send_trial_email(day: int, user, agent_name: str, links: dict):
 
     template_file, subject = template_map[day]
 
-    # Build context
     context = {
         "first_name": user.get("first_name", "there"),
         "agent_name": agent_name,

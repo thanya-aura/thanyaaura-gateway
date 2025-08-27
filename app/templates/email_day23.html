@@ -2,37 +2,34 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Case Study – {{agent_name}}</title>
+  <title>Executive Insights – {{ agent_name|clean }}</title>
 </head>
 <body>
-  <p>Hi {{first_name}},</p>
+  <p>Hi {{ first_name|clean }},</p>
 
-  <p>You’re now on <b>Day 10 of your trial</b>. Here’s how real customers used <b>{{agent_name}}</b> to save time and deliver impact:</p>
+  <p>You’re on <b>Day 23 of your trial</b> – it’s time to look at the big picture across your projects with <b>{{ agent_name|clean }}</b>.</p>
 
-  <p>🎥 Watch the case study video:
-     <a href="https://youtu.be/z-KECtkig1U?si=P4K-cOgOer0-xG7J" target="_blank">Click here</a>
+  <p>🎥 Watch the executive insights video:
+     <a href="https://youtu.be/XlU0plBof8I?si=NyTRYpaF6ZQn-OvS">Click here</a>
   </p>
 
   <p>Try these prompts today:</p>
   <ul>
-    <li><b>Prompt 1:</b> Summarize variance vs budget in 5 key points</li>
-    <li><b>Prompt 2:</b> Generate a quarterly revenue vs plan chart</li>
-    <li><b>Prompt 3:</b> Highlight 3 early warning risks from cashflow trends</li>
-    <li><b>Prompt 4:</b> Write a 200-word executive summary for CFO</li>
+    <li>Consolidate revenue data from all projects</li>
+    <li>Show YoY growth by region</li>
+    <li>Identify top 3 units with largest shortfalls vs target</li>
+    <li>Generate a 300-word executive summary of portfolio performance</li>
   </ul>
 
   {% if platform == "GPT" %}
-    <p>👉 <a href="{{gpt_link}}" target="_blank"><b>Launch {{agent_name}} in GPT Now</b></a></p>
-    <p><b>Note:</b> Each Agent is fully integrated with the <b>GPT backend</b>. Work directly in GPT and let the Agent handle everything for you.</p>
+    <p><a href="{{ gpt_link }}"><b>Launch {{ agent_name|clean }} in GPT Now</b></a></p>
   {% elif platform == "Gemini" %}
-    <p>👉 <a href="{{gemini_link}}" target="_blank"><b>Access {{agent_name}} in Gemini</b></a></p>
-    <p><b>Note:</b> Each Agent is fully integrated with <b>Gemini</b>. Work directly in Gemini and let the Agent handle everything for you.</p>
+    <p><a href="{{ gemini_link }}"><b>Access {{ agent_name|clean }} in Gemini</b></a></p>
   {% elif platform.startswith("Copilot") %}
-    <p>👉 <a href="{{copilot_link}}" target="_blank"><b>Start {{agent_name}} in Microsoft Copilot</b></a></p>
-    <p><b>Note:</b> Each Agent is fully integrated with <b>Microsoft Copilot Studio</b>. Work directly in Copilot and let the Agent handle everything for you.</p>
+    <p><a href="{{ copilot_link }}"><b>Start {{ agent_name|clean }} in Microsoft Copilot</b></a></p>
   {% endif %}
 
-  <p>Keep going — you’re halfway through your trial. The more you explore, the more value you’ll unlock.</p>
-
+  <p><b>Reminder:</b> Only a few days left in your trial – don’t miss out on unlocking the full power of {{ agent_name|clean }}.
+     <a href="{{ upgrade_link }}"><b>Upgrade Now</b></a></p>
 </body>
 </html>
