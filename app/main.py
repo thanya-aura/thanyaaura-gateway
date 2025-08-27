@@ -1,6 +1,4 @@
 # app/main.py
-# Thanyaaura Gateway – GPT + Gemini + Copilot + Enterprise entitlements + Copilot-friendly OpenAPI
-
 import os
 import re
 import json
@@ -10,13 +8,14 @@ from urllib.parse import urlparse
 from json import JSONDecodeError
 from typing import Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException, Request, Depends, Security
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.routing import APIRoute
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import APIKeyHeader
 from starlette.concurrency import run_in_threadpool
 
-# ========= Logging =========
+from app.models import RunAgentRequest
+from app.auth import require_api_key
+
+# ---------- logging ----------
 def _env_log_level(default: str = "INFO") -> int:
     lvl = str(os.getenv("LOG_LEVEL", default)).strip()
     if lvl.isdigit():
@@ -29,33 +28,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("thanyaaura.gateway")
 
-# ========= Models (fallback ถ้าไม่มี app.models) =========
-try:
-    from app.models import RunAgentRequest  # Pydantic model: { email, payload? }
-except Exception:
-    from pydantic import BaseModel, EmailStr, Field
-
-    class RunAgentRequest(BaseModel):
-        email: EmailStr = Field(..., description="User email (used for entitlement check)")
-        payload: Optional[Dict[str, Any]] = Field(default=None, description="Arbitrary agent input")
-
-# ========= API Key Auth (fallback ถ้าไม่มี app.auth) =========
-try:
-    from app.auth import require_api_key  # กรณีคุณมีโมดูล auth เอง
-except Exception:
-    api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
-
-    def require_api_key(api_key: Optional[str] = Security(api_key_header)):
-        """Fallback: ใช้ X-API-KEY เทียบกับ ENV COPILOT_API_KEY (ถ้าไม่ตั้งไว้จะ allow ทั้งหมด)"""
-        required = os.getenv("COPILOT_API_KEY")
-        if not required:
-            # ไม่มีการตั้งค่า → ไม่บังคับ key (สะดวกตอน dev)
-            return True
-        if api_key and api_key == required:
-            return True
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-
-# ========= Agents resolver (optional external table) =========
+# ---------- agents resolver (optional external table) ----------
 try:
     from app.agents import get_agent_slug_from_sku, AGENT_SKU_TO_AGENT  # noqa
     log.info("Loaded resolver from app.agents (keys=%s)", len(AGENT_SKU_TO_AGENT or {}))
@@ -68,39 +41,28 @@ except Exception as ex_generic:
     get_agent_slug_from_sku = None
     AGENT_SKU_TO_AGENT = {}
 
-# ========= Fallback agent SKU map (33 agents + variants) =========
+# ---------- fallback agent SKU map (33 base agents + variants) ----------
 _BASE_FALLBACK = {
-    # Cashflow (3) + aliases
     "cfs": "SINGLE_CF_AI_AGENT", "cfp": "PROJECT_CF_AI_AGENT", "cfpr": "ENTERPRISE_CF_AI_AGENT",
     "single_cf": "SINGLE_CF_AI_AGENT", "project_cf": "PROJECT_CF_AI_AGENT", "enterprise_cf": "ENTERPRISE_CF_AI_AGENT",
-    # Revenue (3)
     "revs": "REVENUE_STANDARD", "revp": "REVENUE_INTERMEDIATE", "revpr": "REVENUE_ADVANCE",
     "revenue_standard": "REVENUE_STANDARD", "revenue_intermediate": "REVENUE_INTERMEDIATE", "revenue_advance": "REVENUE_ADVANCE",
-    # CAPEX (3)
     "capexs": "CAPEX_STANDARD", "capexp": "CAPEX_PLUS", "capexpr": "CAPEX_PREMIUM",
     "capex_standard": "CAPEX_STANDARD", "capex_plus": "CAPEX_PLUS", "capex_premium": "CAPEX_PREMIUM",
-    # FX (3)
     "fxs": "FX_STANDARD", "fxp": "FX_PLUS", "fxpr": "FX_PREMIUM",
     "fx_standard": "FX_STANDARD", "fx_plus": "FX_PLUS", "fx_premium": "FX_PREMIUM",
-    # COST (3)
     "costs": "COST_STANDARD", "costp": "COST_PLUS", "costpr": "COST_PREMIUM",
     "cost_standard": "COST_STANDARD", "cost_plus": "COST_PLUS", "cost_premium": "COST_PREMIUM",
-    # BUDGET (3)
     "buds": "BUDGET_STANDARD", "budp": "BUDGET_PLUS", "budpr": "BUDGET_PREMIUM",
     "budget_standard": "BUDGET_STANDARD", "budget_plus": "BUDGET_PLUS", "budget_premium": "BUDGET_PREMIUM",
-    # REPORT (3)
     "reps": "REPORT_STANDARD", "repp": "REPORT_PLUS", "reppr": "REPORT_PREMIUM",
     "report_standard": "REPORT_STANDARD", "report_plus": "REPORT_PLUS", "report_premium": "REPORT_PREMIUM",
-    # VARIANCE (3)
     "vars": "VARIANCE_STANDARD", "varp": "VARIANCE_PLUS", "varpr": "VARIANCE_PREMIUM",
     "variance_standard": "VARIANCE_STANDARD", "variance_plus": "VARIANCE_PLUS", "variance_premium": "VARIANCE_PREMIUM",
-    # MARGIN (3)
     "mars": "MARGIN_STANDARD", "marp": "MARGIN_PLUS", "marpr": "MARGIN_PREMIUM",
     "margin_standard": "MARGIN_STANDARD", "margin_plus": "MARGIN_PLUS", "margin_premium": "MARGIN_PREMIUM",
-    # FORECAST (3)
     "fors": "FORECAST_STANDARD", "forp": "FORECAST_PLUS", "forpr": "FORECAST_PREMIUM",
     "forecast_standard": "FORECAST_STANDARD", "forecast_plus": "FORECAST_PLUS", "forecast_premium": "FORECAST_PREMIUM",
-    # DECISION (3)
     "decs": "DECISION_STANDARD", "decp": "DECISION_PLUS", "decpr": "DECISION_PREMIUM",
     "decision_standard": "DECISION_STANDARD", "decision_plus": "DECISION_PLUS", "decision_premium": "DECISION_PREMIUM",
 }
@@ -110,14 +72,12 @@ for k, v in list(_BASE_FALLBACK.items()):
     FALLBACK_SKU_TO_AGENT[f"{k}_gemini"] = v
     FALLBACK_SKU_TO_AGENT[f"{k}_ms"] = v
 
-# Enterprise license SKUs (Copilot/Enterprise)
 FALLBACK_SKU_TO_AGENT.update({
     "en_standard": "ENTERPRISE_LICENSE_STANDARD",
     "en_professional": "ENTERPRISE_LICENSE_PRO",
     "en_unlimited": "ENTERPRISE_LICENSE_UNLIMITED",
 })
 
-# ========= Tier SKUs (Standard/Plus/Premium) =========
 _BASE_TIER = {
     "standard": "STANDARD", "plus": "PLUS", "premium": "PREMIUM",
     "tier_standard": "STANDARD", "tier_plus": "PLUS", "tier_premium": "PREMIUM",
@@ -126,35 +86,23 @@ TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
     TIER_SKU_TO_CODE[f"module-0-{k}"] = v
 
-# ========= Entitlements (individual + enterprise) =========
 try:
-    from app import entitlements as ent_resolver
-    from app import enterprise as enterprise_api
+    from app import entitlements as ent_resolver  # optional
+    from app import enterprise as enterprise_api  # optional
 except Exception as e:
     ent_resolver = None
     enterprise_api = None
     log.warning("Entitlements modules not loaded (%s). Entitlement endpoints will degrade gracefully.", e)
 
-# Enterprise access checker
 try:
-    from app.enterprise_access import check_entitlement
+    from app.enterprise_access import check_entitlement  # gating
 except Exception as e:
     check_entitlement = None
     log.warning("enterprise_access.check_entitlement not available (%s).", e)
 
 app = FastAPI(title="Thanyaaura Gateway", version="1.9.0")
 
-# ========= CORS (optional สำหรับ dev / Copilot import) =========
-allow_origins = [o.strip() for o in (os.getenv("ALLOW_ORIGINS", "*")).split(",")]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allow_origins or ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ========= Helpers =========
+# ---------------------- Helpers ----------------------
 def _drop_module0(s: str) -> str:
     s = (s or "").strip().lower()
     return s[9:] if s.startswith("module-0-") else s
@@ -164,8 +112,8 @@ def derive_sku_from_url(url_str: Optional[str]) -> Optional[str]:
         return None
     try:
         path = urlparse(url_str).path.lower()
-        match = re.search(r"/module-0-([a-z0-9_]+)(?:/|$)", path)
-        return match.group(1) if match else None
+        m = re.search(r"/module-0-([a-z0-9_]+)(?:/|$)", path)
+        return m.group(1) if m else None
     except Exception:
         return None
 
@@ -211,8 +159,8 @@ def resolve_agent_slug(sku: str) -> Optional[str]:
             agent = get_agent_slug_from_sku(sku)
             if agent:
                 return agent
-        except Exception as ex_resolver:
-            log.warning("Resolver error: %s", ex_resolver)
+        except Exception as ex:
+            log.warning("Resolver error: %s", ex)
     return _resolve_with_table(sku) or _resolve_with_fallback(sku)
 
 def resolve_tier_code(sku: str) -> Optional[str]:
@@ -231,13 +179,7 @@ def _db():
     except Exception as ex_generic:
         raise HTTPException(status_code=500, detail=f"DB module error: {ex_generic}")
 
-# ========= Entitlement gate =========
 def require_entitlement_or_403(user_email: str, sku: str):
-    """
-    แปลง SKU -> (agent_slug, platform) และตรวจสิทธิ์:
-    - Individual: จาก subscriptions ของ email
-    - Enterprise: จาก domain + enterprise license (en_standard/professional/unlimited)
-    """
     short = _drop_module0(sku)
     agent_slug = resolve_agent_slug(short) or short.upper()
     platform = derive_platform(short)
@@ -247,14 +189,13 @@ def require_entitlement_or_403(user_email: str, sku: str):
         raise HTTPException(status_code=403, detail="No entitlement for this agent/platform.")
     return agent_slug, platform
 
-# ========= Routes: basics =========
+# ---------------------- Basics ----------------------
 @app.get("/")
 async def root():
     return {
         "name": "Thanyaaura Gateway",
         "version": getattr(app, "version", None),
         "docs": "/docs",
-        "openapi": "/openapi.json",
         "endpoints_hint": [
             "/health", "/healthz", "/routes", "/debug/*",
             "/billing/thrivecart",
@@ -276,7 +217,7 @@ async def healthz():
 async def routes():
     return [r.path for r in app.routes if isinstance(r, APIRoute)]
 
-# ========= Routes: debug =========
+# ---------------------- Debug ----------------------
 @app.get("/debug/resolve")
 async def debug_resolve(sku: str):
     short_sku = _drop_module0(sku)
@@ -322,7 +263,7 @@ async def debug_db_ping():
     except Exception as ex_dbping:
         return {"ok": False, "error": str(ex_dbping)}
 
-# ========= Entitlements endpoints =========
+# ---------------------- Entitlements APIs ----------------------
 @app.get("/entitlements/{email}")
 async def entitlements(email: str):
     if not ent_resolver:
@@ -349,28 +290,15 @@ async def entitlements_company(domain: str):
     }
     return ent
 
-# ========= Example: run an agent (secured, entitlement-checked) =========
-@app.post(
-    "/agents/{sku}/run",
-    summary="Run a Finance Agent",
-    tags=["agents"],
-    dependencies=[Depends(require_api_key)],
-)
+# ---------------------- Agents: run (with entitlement) ----------------------
+@app.post("/agents/{sku}/run", summary="Run a Finance Agent", tags=["agents"], dependencies=[Depends(require_api_key)])
 async def run_agent(sku: str, req: RunAgentRequest):
-    """
-    - Body ต้องมี `email` (ใช้ตรวจสิทธิ์) และ `payload` (ข้อมูลสำหรับเอเจนต์)
-    - ตรวจสิทธิ์ด้วย enterprise/user entitlement ก่อน
-    """
     user_email = req.email
     agent_slug, platform = require_entitlement_or_403(user_email, sku)
-
-    # TODO: เรียก logic ของเอเจนต์จริงที่นี่
-    # result = await actually_run_agent(agent_slug, req.payload, platform=platform)
-    # return {"ok": True, "agent": agent_slug, "platform": platform, "result": result}
-
+    # TODO: เรียก logic agent จริงของคุณแทน stub ด้านล่าง
     return {"ok": True, "agent": agent_slug, "platform": platform, "echo": (req.payload or {})}
 
-# ========= Payload reader (สำหรับ webhook) =========
+# ---------------------- Payload reader (for ThriveCart) ----------------------
 async def read_payload(request: Request) -> dict:
     ctype = (request.headers.get("content-type") or "").lower()
     if "application/json" in ctype:
@@ -388,7 +316,7 @@ async def read_payload(request: Request) -> dict:
         log.warning("Form parse error: %s", ex_form)
         return {}
 
-# ========= ThriveCart webhook =========
+# ---------------------- ThriveCart webhook ----------------------
 @app.post("/billing/thrivecart")
 async def billing_thrivecart(request: Request):
     data = await read_payload(request)
@@ -419,10 +347,9 @@ async def billing_thrivecart(request: Request):
 
     platform = derive_platform(short_sku)
 
-    # sync โดเมน enterprise (ถ้ามีโมดูล)
     if enterprise_api:
         try:
-            enterprise_api.apply_thrivecart_event(data)
+            enterprise_api.apply_thrivecart_event(data)  # optional best-effort
         except Exception as e:
             log.warning("apply_thrivecart_event failed: %s", e)
 
@@ -452,7 +379,7 @@ async def billing_thrivecart(request: Request):
         "email": email,
     }
 
-# ========= Startup =========
+# ---------------------- Startup ----------------------
 @app.on_event("startup")
 async def ensure_admin_on_startup():
     try:

@@ -1,7 +1,28 @@
 # app/models.py
-from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
 class RunAgentRequest(BaseModel):
-    email: str = Field(..., description="End-user email (UPN) to check entitlements")
-    payload: Optional[Dict[str, Any]] = Field(default=None, description="Agent-specific inputs")
+    """
+    Request body สำหรับ /agents/{sku}/run
+    - email: ใช้ตรวจสิทธิ์ (entitlement) ของผู้ใช้
+    - payload: ข้อมูลอินพุตเฉพาะเอเจนต์ (ใส่หรือไม่ใส่ก็ได้)
+    """
+    email: EmailStr = Field(..., description="End-user email (UPN) used for entitlement check")
+    payload: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Agent-specific inputs"
+    )
+
+    # Pydantic v2 config
+    model_config = ConfigDict(
+        extra="forbid",  # กัน field แปลกปลอมใน body
+        json_schema_extra={
+            "examples": [
+                {
+                    "email": "alice@company.com",
+                    "payload": {"month": "2025-08", "currency": "USD"}
+                }
+            ]
+        },
+    )

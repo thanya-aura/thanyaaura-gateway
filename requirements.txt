@@ -9,4 +9,5 @@ gunicorn
 apscheduler
 psycopg[binary]
 jinja2
+email-validator>=2.1
 
