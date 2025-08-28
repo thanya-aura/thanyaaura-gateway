@@ -170,7 +170,7 @@ except Exception as e:
     check_entitlement = None
     log.warning("enterprise_access.check_entitlement not available (%s).", e)
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.9.0")
+app = FastAPI(title="Thanyaaura Gateway", version="1.9.1")
 
 # ---------- CORS (configurable via ENV CORS_ORIGINS=csv) ----------
 def _parse_csv_env(name: str, default_list: list[str]) -> list[str]:
@@ -221,16 +221,37 @@ def derive_sku(data: Dict[str, Any]) -> Optional[str]:
     )
     return derive_sku_from_url(f_url)
 
-def derive_platform(sku: Optional[str]) -> str:
-    if not sku:
-        return "unknown"
-    if sku.endswith("_gemini"):
+# ===== NEW: platform helpers =====
+def normalize_platform(p: Optional[str]) -> str:
+    """
+    Map input → canonical names: GPT, Gemini, Copilot
+    Accepts: gpt/openai, gemini/google, ms/microsoft/copilot, None/""
+    """
+    x = (p or "").strip().lower()
+    if x in ("", "gpt", "openai"):
+        return "GPT"
+    if x in ("gemini", "google"):
         return "Gemini"
-    if sku.endswith("_ms"):
+    if x in ("ms", "microsoft", "copilot"):
         return "Copilot"
-    if sku.startswith("en_"):
-        return "Copilot-Enterprise"
+    # keep as-is for unknowns
+    return (p or "").strip()
+
+def derive_platform_from_sku(sku: Optional[str]) -> str:
+    t = (sku or "").strip().lower()
+    if not t:
+        return "GPT"
+    if t.endswith("_gemini"):
+        return "Gemini"
+    if t.endswith("_ms"):
+        return "Copilot"
+    if t.startswith("en_"):
+        return "Copilot-Enterprise"  # จะถูก normalize เป็น "Copilot" ใน checker
     return "GPT"
+
+def derive_platform(sku: Optional[str]) -> str:
+    # คงฟังก์ชันเดิมไว้ (สำหรับ compatibility)
+    return derive_platform_from_sku(sku)
 
 def _resolve_with_table(sku: str) -> Optional[str]:
     if not isinstance(AGENT_SKU_TO_AGENT, dict) or not AGENT_SKU_TO_AGENT:
@@ -527,7 +548,14 @@ async def billing_thrivecart(request: Request):
     if not order_id or not email:
         raise HTTPException(status_code=400, detail="Missing order_id or customer[email]")
 
-    platform = derive_platform(short_sku)
+    # ===== NEW: honor platform from payload; fallback to derive from SKU
+    payload_platform = (
+        data.get("platform")
+        or data.get("passthrough[platform]")
+        or data.get("platform_name")
+        or data.get("passthrough_platform")
+    )
+    platform = normalize_platform(payload_platform) if payload_platform else derive_platform_from_sku(short_sku)
 
     if enterprise_api:
         try:
@@ -538,16 +566,19 @@ async def billing_thrivecart(request: Request):
     dbmod = _db()
     try:
         if short_sku.startswith("en_"):
+            # enterprise license (โดเมน) — จะถูก normalize เป็น Copilot ฝั่ง checker
             await run_in_threadpool(
                 dbmod.upsert_enterprise_license, order_id, email, short_sku, agent_slug, platform
             )
             ttype = "ENTERPRISE"
         elif tier_code:
+            # TIER: เก็บ platform ตาม payload (หรือ suffix) ไม่บังคับ GPT เสมออีกต่อไป
             await run_in_threadpool(
                 dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code, platform
             )
             ttype = "TIER"
         else:
+            # AGENT-LEVEL: เก็บ platform ตาม payload/suffix
             await run_in_threadpool(
                 dbmod.upsert_subscription_and_entitlement,
                 order_id,
