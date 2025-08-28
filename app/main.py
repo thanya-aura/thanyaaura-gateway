@@ -1,4 +1,3 @@
-# app/main.py
 import os
 import re
 import json
@@ -15,19 +14,15 @@ from starlette.concurrency import run_in_threadpool
 
 # ---------- Pydantic request model (with safe fallback) ----------
 try:
-    # ใช้ไฟล์ models.py ตามปกติ
+    # normal path
     from app.models import RunAgentRequest
-except Exception as _e:  # ไม่ให้ deploy ล้มถ้า refactor ชื่อไฟล์/โมดูล
+except Exception as _e:
     from typing import Optional, Dict, Any
     from pydantic import BaseModel, Field, ConfigDict, EmailStr
 
     class RunAgentRequest(BaseModel):
-        email: EmailStr = Field(
-            ..., description="End-user email (UPN) used for entitlement check"
-        )
-        payload: Optional[Dict[str, Any]] = Field(
-            default=None, description="Agent-specific inputs"
-        )
+        email: EmailStr = Field(..., description="End-user email (UPN) used for entitlement check")
+        payload: Optional[Dict[str, Any]] = Field(default=None, description="Agent-specific inputs")
         model_config = ConfigDict(extra="forbid")
 
 from app.auth import require_api_key
@@ -221,37 +216,30 @@ def derive_sku(data: Dict[str, Any]) -> Optional[str]:
     )
     return derive_sku_from_url(f_url)
 
-# ===== NEW: platform helpers =====
-def normalize_platform(p: Optional[str]) -> str:
-    """
-    Map input → canonical names: GPT, Gemini, Copilot
-    Accepts: gpt/openai, gemini/google, ms/microsoft/copilot, None/""
-    """
-    x = (p or "").strip().lower()
-    if x in ("", "gpt", "openai"):
-        return "GPT"
-    if x in ("gemini", "google"):
-        return "Gemini"
-    if x in ("ms", "microsoft", "copilot"):
+def _norm_platform_tag(tag: Optional[str]) -> Optional[str]:
+    if not tag:
+        return None
+    t = str(tag).strip()
+    u = t.upper()
+    if u in ("MS", "MICROSOFT", "COPILOT") or u.startswith("COPILOT"):
         return "Copilot"
-    # keep as-is for unknowns
-    return (p or "").strip()
+    if u.startswith("GEMINI"):
+        return "Gemini"
+    if u in ("GPT", "OPENAI", "CHATGPT"):
+        return "GPT"
+    return t
 
 def derive_platform_from_sku(sku: Optional[str]) -> str:
-    t = (sku or "").strip().lower()
-    if not t:
-        return "GPT"
-    if t.endswith("_gemini"):
+    if not sku:
+        return "unknown"
+    s = (sku or "").lower()
+    if s.endswith("_gemini"):
         return "Gemini"
-    if t.endswith("_ms"):
+    if s.endswith("_ms"):
         return "Copilot"
-    if t.startswith("en_"):
-        return "Copilot-Enterprise"  # จะถูก normalize เป็น "Copilot" ใน checker
+    if s.startswith("en_"):  # ENTERPRISE LICENSES → canonicalize to "Copilot"
+        return "Copilot"
     return "GPT"
-
-def derive_platform(sku: Optional[str]) -> str:
-    # คงฟังก์ชันเดิมไว้ (สำหรับ compatibility)
-    return derive_platform_from_sku(sku)
 
 def _resolve_with_table(sku: str) -> Optional[str]:
     if not isinstance(AGENT_SKU_TO_AGENT, dict) or not AGENT_SKU_TO_AGENT:
@@ -303,16 +291,15 @@ DISABLE_ENTITLEMENT_CHECK = os.getenv("DISABLE_ENTITLEMENT_CHECK", "0") == "1"
 def require_entitlement_or_403(user_email: str, sku: str):
     short = _drop_module0(sku)
     agent_slug = resolve_agent_slug(short) or short.upper()
-    platform = derive_platform(short)
+    platform = derive_platform_from_sku(short)
 
-    # bypass ชั่วคราวเพื่อทดสอบ/เดโม
+    # bypass flag for demo
     if DISABLE_ENTITLEMENT_CHECK:
         return agent_slug, platform
 
     if not check_entitlement:
         raise HTTPException(status_code=501, detail="Entitlement checker not available.")
 
-    # ลองเช็คหลายแบบ: slug → sku → เคสล่าง/บน (กันกรณี DB เก็บไม่ตรงรูป)
     candidates = [
         (agent_slug, platform),
         (short, platform),
@@ -371,7 +358,7 @@ if IS_DEBUG_ROUTES:
             "sku_short": short_sku,
             "agent_slug": resolve_agent_slug(short_sku),
             "tier_code": resolve_tier_code(short_sku),
-            "platform": derive_platform(short_sku),
+            "platform": derive_platform_from_sku(short_sku),
         }
 
     @app.get("/debug/sku-keys")
@@ -408,7 +395,6 @@ if IS_DEBUG_ROUTES:
         except Exception as ex_dbping:
             return {"ok": False, "error": str(ex_dbping)}
 
-    # ===== NEW: ดูผล resolve_entitlements() และ error ชัด ๆ =====
     @app.get("/debug/entitlements/{email}")
     async def debug_entitlements_raw(email: str):
         if not ent_resolver:
@@ -420,18 +406,13 @@ if IS_DEBUG_ROUTES:
             return {"ok": True, "result": res}
         except Exception as ex:
             import traceback
-            return {
-                "ok": False,
-                "error": str(ex),
-                "trace": traceback.format_exc().splitlines()[-8:],  # tail
-            }
+            return {"ok": False, "error": str(ex), "trace": traceback.format_exc().splitlines()[-8:]}
 
-    # ===== NEW: ลองเช็คทั้ง slug/sku แล้วรายงานผลละเอียด =====
     @app.get("/debug/check-entitlement")
     async def debug_check_entitlement(email: str, sku: str):
         short = _drop_module0(sku)
         slug = resolve_agent_slug(short) or short.upper()
-        plat = derive_platform(short)
+        plat = derive_platform_from_sku(short)
         if not check_entitlement:
             return {"ok": False, "error": "check_entitlement missing", "agent_slug": slug, "sku": short, "platform": plat}
         try:
@@ -498,7 +479,7 @@ async def entitlements_company(domain: str):
 async def run_agent(sku: str, req: RunAgentRequest):
     user_email = req.email
     agent_slug, platform = require_entitlement_or_403(user_email, sku)
-    # TODO: เรียก logic agent จริงของคุณแทน stub ด้านล่าง
+    # TODO: call the real business logic here
     return {"ok": True, "agent": agent_slug, "platform": platform, "echo": (req.payload or {})}
 
 # ---------------------- Payload reader (for ThriveCart) ----------------------
@@ -548,37 +529,35 @@ async def billing_thrivecart(request: Request):
     if not order_id or not email:
         raise HTTPException(status_code=400, detail="Missing order_id or customer[email]")
 
-    # ===== NEW: honor platform from payload; fallback to derive from SKU
-    payload_platform = (
-        data.get("platform")
-        or data.get("passthrough[platform]")
-        or data.get("platform_name")
-        or data.get("passthrough_platform")
-    )
-    platform = normalize_platform(payload_platform) if payload_platform else derive_platform_from_sku(short_sku)
+    # ---- Platform canonicalization rules ----
+    # 1) Enterprise SKUs: force "Copilot" (DB queries expect this family)
+    # 2) Otherwise, honor explicit 'platform' if provided (MS/COPILOT/GEMINI/GPT) after normalization
+    # 3) Fallback to deriving from SKU suffix (_gemini/_ms) or default "GPT"
+    if short_sku.startswith("en_"):
+        platform = "Copilot"
+    else:
+        posted_platform = _norm_platform_tag(data.get("platform"))
+        platform = posted_platform or derive_platform_from_sku(short_sku)
 
     if enterprise_api:
         try:
-            enterprise_api.apply_thrivecart_event(data)  # optional best-effort
+            enterprise_api.apply_thrivecart_event(data)  # best-effort side effect
         except Exception as e:
             log.warning("apply_thrivecart_event failed: %s", e)
 
     dbmod = _db()
     try:
         if short_sku.startswith("en_"):
-            # enterprise license (โดเมน) — จะถูก normalize เป็น Copilot ฝั่ง checker
             await run_in_threadpool(
                 dbmod.upsert_enterprise_license, order_id, email, short_sku, agent_slug, platform
             )
             ttype = "ENTERPRISE"
         elif tier_code:
-            # TIER: เก็บ platform ตาม payload (หรือ suffix) ไม่บังคับ GPT เสมออีกต่อไป
             await run_in_threadpool(
                 dbmod.upsert_tier_subscription, order_id, email, short_sku, tier_code, platform
             )
             ttype = "TIER"
         else:
-            # AGENT-LEVEL: เก็บ platform ตาม payload/suffix
             await run_in_threadpool(
                 dbmod.upsert_subscription_and_entitlement,
                 order_id,
@@ -615,5 +594,4 @@ async def ensure_admin_on_startup():
 # ---------------------- HEAD / (avoid 405 in probes) ----------------------
 @app.head("/")
 def head_root():
-    # ตอบแบบไม่มีบอดี้ เพื่อให้ health probe ที่ยิง HEAD / ไม่เจอ 405
     return Response(status_code=204)
