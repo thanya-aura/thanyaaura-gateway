@@ -1,0 +1,33 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.18/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.18",
+  "version": "1.0.0",
+  "id": "73de1056-90a1-4a4a-b1df-5c9489ee7853",
+  "developer": {
+    "name": "Thanyaaura Co., Ltd.",
+    "websiteUrl": "https://api.thanyaaura.com",
+    "privacyUrl": "https://api.thanyaaura.com/privacy",
+    "termsOfUseUrl": "https://api.thanyaaura.com/terms"
+  },
+  "name": {
+    "short": "Thanyaaura Finance Agent (Store)",
+    "full": "Thanyaaura Finance Agent (Store) for Microsoft 365 Copilot"
+  },
+  "description": {
+    "short": "เอเยนต์การเงินสำหรับ Microsoft 365 Copilot ที่รองรับการส่งขึ้น Microsoft Store",
+    "full": "เชื่อมต่อ Copilot กับ API การเงินของคุณเพื่อทำ cashflow, variance, revenue, CAPEX และ compliance โดยสั่งงานด้วย slug (เช่น CFS) และรับผลลัพธ์แบบมีโครงสร้าง แพ็กเกจนี้เตรียมไว้สำหรับการตรวจสอบและเผยแพร่ใน Microsoft Store/Agents Store พร้อมตัวอย่างพรอมป์ทและปลั๊กอิน OAuth."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#1E88E5",
+  "copilotAgents": {
+    "declarativeAgents": [
+      {
+        "id": "thanyaaura-finance-agent",
+        "file": "declarative-agent.json"
+      }
+    ]
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Thanyaaura Finance Gateway",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.thanyaaura.com"
+    }
+  ],
+  "paths": {
+    "/v1/run": {
+      "post": {
+        "operationId": "runAgent",
+        "summary": "Run one finance agent by slug",
+        "security": [
+          {
+            "OAuth2": [
+              "read"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ChatMessage": {
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user",
+              "assistant"
+            ]
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "RunRequest": {
+        "type": "object",
+        "required": [
+          "agent_slug",
+          "input"
+        ],
+        "properties": {
+          "agent_slug": {
+            "type": "string",
+            "description": "Slug of the agent to run (e.g., CFS)"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "gemini",
+              "endpoint"
+            ],
+            "description": "Optional provider override"
+          },
+          "model": {
+            "type": "string",
+            "description": "Optional model override"
+          },
+          "input": {
+            "type": "object",
+            "properties": {
+              "messages": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ChatMessage"
+                }
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "RunResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "OAuth2": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://YOUR_IDP_DOMAIN/authorize",
+            "tokenUrl": "https://YOUR_IDP_DOMAIN/oauth/token",
+            "scopes": {
+              "read": "Basic access"
+            }
+          }
+        }
+      }
+    }
+  }
+}

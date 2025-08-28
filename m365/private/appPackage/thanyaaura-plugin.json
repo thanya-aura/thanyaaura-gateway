@@ -1,0 +1,79 @@
+{
+  "schema_version": "v2.3",
+  "name_for_human": "Thanyaaura Finance Gateway",
+  "namespace": "Thanyaaura",
+  "description_for_human": "รันเอเยนต์การเงินด้วย slug (เช่น CFS) และคืนผลวิเคราะห์แบบมีโครงสร้าง",
+  "description_for_model": "Expose ฟังก์ชัน runAgent ที่ POST ไปยัง /v1/run ตามสคีมา OpenAPI; ใช้สำหรับ cashflow, variance, CAPEX, revenue, compliance",
+  "functions": [
+    {
+      "name": "runAgent",
+      "description": "Run one finance agent by slug",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "agent_slug": {
+            "type": "string",
+            "description": "เช่น CFS, CAPEX"
+          },
+          "provider": {
+            "type": "string",
+            "description": "ตัวเลือก provider (openai, gemini, endpoint)"
+          },
+          "model": {
+            "type": "string",
+            "description": "ตัวเลือกรุ่นโมเดล"
+          },
+          "input": {
+            "type": "object",
+            "description": "พารามิเตอร์อิสระตามงาน",
+            "properties": {
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "agent_slug",
+          "input"
+        ]
+      },
+      "returns": {
+        "type": "string",
+        "description": "สรุปผลแบบภาษาธรรมชาติ ถ้ามีตาราง ให้เอเยนต์สรุปและแสดงอย่างกระชับ"
+      }
+    }
+  ],
+  "runtimes": [
+    {
+      "type": "OpenApi",
+      "auth": {
+        "type": "OAuthPluginVault",
+        "reference_id": "SET-IN-ADMIN-PORTAL"
+      },
+      "run_for_functions": [
+        "runAgent"
+      ],
+      "spec": {
+        "url": "https://api.thanyaaura.com/openapi.json",
+        "progress_style": "ShowUsage"
+      }
+    }
+  ],
+  "capabilities": {
+    "conversation_starters": [
+      {
+        "text": "รัน CFS cashflow variance สำหรับ Project A ไตรมาสนี้"
+      },
+      {
+        "text": "รัน CAPEX agent ของ Project X คำนวณ ROI/IRR/Payback"
+      },
+      {
+        "text": "เทียบรายได้ YoY ตาม region/product และไฮไลต์ outliers"
+      }
+    ]
+  }
+}
