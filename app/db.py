@@ -3,6 +3,12 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 
+# ===== Feature flags =====
+# เขียนซ้ำลง subscriptions เพื่อความเข้ากันได้ย้อนหลัง (ค่าเริ่มต้น: เปิด)
+EN_DUAL_WRITE = os.getenv("EN_DUAL_WRITE", "1") == "1"
+# บังคับให้โดเมนหนึ่งมี active ได้ครั้งละ 1 แผน: ปิดตัวอื่นอัตโนมัติ (ค่าเริ่มต้น: เปิด)
+EN_DEACTIVATE_OTHERS = os.getenv("EN_DEACTIVATE_OTHERS", "1") == "1"
+
 # ---------- Connection ----------
 def _connect():
     url = os.environ.get("DATABASE_URL") or os.environ.get("DB_URL")
@@ -79,43 +85,74 @@ def upsert_tier_subscription(
 def upsert_enterprise_license(
     order_id: str,
     user_email: str,
-    sku: str,                 # e.g., en_standard, en_professional, en_unlimited
-    agent_slug: str | None,   # not used here; kept for signature parity
+    sku: str,                 # en_standard | en_professional | en_unlimited
+    agent_slug: str | None,   # ไม่ได้ใช้ แต่คง signature เดิม
     platform: str,
     status: str = "active",
 ):
     """
-    Store Copilot enterprise license (en_standard / en_professional / en_unlimited)
-    → บันทึกลงตาราง enterprise_licenses (PRIMARY) ไม่ใช่ subscriptions
+    บันทึกสิทธิ์ Enterprise ลง enterprise_licenses (แหล่งอ้างอิงหลัก)
+    และเก็บร่องรอยไว้ใน subscriptions ตามเดิม (เพื่อความเข้ากันได้ย้อนหลัง)
+    - มี option ปิดสิทธิ์แผนเก่าในโดเมนเดียวกันให้อัตโนมัติ (EN_DEACTIVATE_OTHERS)
     """
-    license_type = (sku or "").lower().strip()
-    if license_type not in ("en_standard", "en_professional", "en_unlimited"):
-        # ไม่ใช่ enterprise sku ก็ข้าม (คงพฤติกรรมเดิมไว้)
-        return False
+    license_type = (sku or "").strip().lower()
+    tier_map = {
+        "en_standard": "STANDARD",
+        "en_professional": "PROFESSIONAL",
+        "en_unlimited": "UNLIMITED",
+    }
+    tier_code = tier_map.get(license_type)
+    if not tier_code:
+        raise ValueError(f"bad enterprise sku: {sku!r}")
 
-    domain = (user_email or "").split("@")[-1].lower().strip()
-    if not domain:
-        print("DB warn: upsert_enterprise_license got bad purchaser email:", user_email)
-        return False
+    # ดึงโดเมนจากอีเมลผู้ซื้อ
+    email = (user_email or "").strip().lower()
+    if "@" not in email:
+        raise ValueError("bad purchaser email (no domain)")
+    domain = email.split("@", 1)[1]
 
-    tier_code = (
-        "STANDARD" if license_type == "en_standard"
-        else "PROFESSIONAL" if license_type == "en_professional"
-        else "UNLIMITED"
-    )
-
-    sql = """
-        INSERT INTO enterprise_licenses (domain, sku, tier_code, active, activated_at, expires_at, last_order_id)
-        VALUES (%s, %s, %s, TRUE, NOW(), NULL, %s)
-        ON CONFLICT (domain, sku)
-        DO UPDATE SET tier_code     = EXCLUDED.tier_code,
-                      active        = TRUE,
-                      activated_at  = NOW(),
-                      expires_at    = NULL,
-                      last_order_id = EXCLUDED.last_order_id;
+    # 1) อัปเซิร์ตลง enterprise_licenses (ตัวจริงที่ตัว checker ใช้อ่าน)
+    sql_ent = """
+        INSERT INTO enterprise_licenses (domain, sku, tier_code, active, last_order_id, activated_at, expires_at)
+        VALUES (%s, %s, %s, TRUE, %s, now(), NULL)
+        ON CONFLICT (domain, sku) DO UPDATE
+           SET tier_code     = EXCLUDED.tier_code,
+               active        = TRUE,
+               last_order_id = EXCLUDED.last_order_id,
+               activated_at  = now(),
+               expires_at    = NULL;
     """
-    # order_id ใช้เก็บใน last_order_id เพื่อ audit
-    return _upsert(sql, (domain, license_type, tier_code, order_id))
+    ok1 = _upsert(sql_ent, (domain, license_type, tier_code, order_id))
+
+    # 1.1) (ทางเลือก) ปิดสิทธิ์ enterprise sku อื่น ๆ ของโดเมนเดียวกัน (เหลือ active แผนล่าสุดเพียงตัวเดียว)
+    ok1b = True
+    if EN_DEACTIVATE_OTHERS:
+        sql_deact = """
+            UPDATE enterprise_licenses
+               SET active = FALSE,
+                   expires_at = now()
+             WHERE domain = %s
+               AND sku <> %s
+               AND active IS TRUE;
+        """
+        ok1b = _upsert(sql_deact, (domain, license_type))
+
+    # 2) (ทางเลือก) เก็บร่องรอยไว้ใน subscriptions (ตามโค้ดเดิม) เพื่อ backward compatibility
+    ok2 = True
+    if EN_DUAL_WRITE:
+        sub_id = f"tc-enterprise-{order_id}-{license_type}-{platform}".lower()
+        sql_sub = """
+            INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, now(), now())
+            ON CONFLICT (id)
+            DO UPDATE SET platform   = EXCLUDED.platform,
+                          status     = EXCLUDED.status,
+                          updated_at = now();
+        """
+        # เขียน platform เป็น 'Copilot' ให้เป็นไปตามกติกาเดียวกันเสมอ
+        ok2 = _upsert(sql_sub, (sub_id, user_email, license_type, "Copilot", "active"))
+
+    return bool(ok1 and ok1b and ok2)
 
 def cancel_subscription(user_email: str, sku: str | None = None):
     """
