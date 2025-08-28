@@ -1,3 +1,4 @@
+# app/main.py
 import os
 import re
 import json
@@ -5,7 +6,7 @@ import importlib
 import logging
 from urllib.parse import urlparse
 from json import JSONDecodeError
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 from fastapi import FastAPI, HTTPException, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,9 +15,8 @@ from starlette.concurrency import run_in_threadpool
 
 # ---------- Pydantic request model (with safe fallback) ----------
 try:
-    # normal path
     from app.models import RunAgentRequest
-except Exception as _e:
+except Exception:
     from typing import Optional, Dict, Any
     from pydantic import BaseModel, Field, ConfigDict, EmailStr
 
@@ -148,26 +148,24 @@ TIER_SKU_TO_CODE = dict(_BASE_TIER)
 for k, v in list(_BASE_TIER.items()):
     TIER_SKU_TO_CODE[f"module-0-{k}"] = v
 
+# ---------- OPTIONAL entitlement modules ----------
 try:
     from app import entitlements as ent_resolver  # optional
     from app import enterprise as enterprise_api  # optional
 except Exception as e:
     ent_resolver = None
     enterprise_api = None
-    log.warning(
-        "Entitlements modules not loaded (%s). Entitlement endpoints will degrade gracefully.",
-        e,
-    )
+    log.warning("Entitlements modules not loaded (%s). Entitlement endpoints will degrade gracefully.", e)
 
 try:
-    from app.enterprise_access import check_entitlement  # gating
+    from app.enterprise_access import check_entitlement  # gating (legacy)
 except Exception as e:
     check_entitlement = None
     log.warning("enterprise_access.check_entitlement not available (%s).", e)
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.9.1")
+app = FastAPI(title="Thanyaaura Gateway", version="1.9.2")
 
-# ---------- CORS (configurable via ENV CORS_ORIGINS=csv) ----------
+# ---------- CORS ----------
 def _parse_csv_env(name: str, default_list: list[str]) -> list[str]:
     s = os.getenv(name)
     if not s:
@@ -211,9 +209,7 @@ def derive_sku(data: Dict[str, Any]) -> Optional[str]:
     sku = data.get("sku") or data.get("passthrough[sku]") or data.get("passthrough")
     if sku:
         return _drop_module0(str(sku))
-    f_url = (
-        data.get("fulfillment[url]") or data.get("fulfillment_url") or data.get("fulfillment")
-    )
+    f_url = (data.get("fulfillment[url]") or data.get("fulfillment_url") or data.get("fulfillment"))
     return derive_sku_from_url(f_url)
 
 def _norm_platform_tag(tag: Optional[str]) -> Optional[str]:
@@ -285,6 +281,45 @@ def _db():
     except Exception as ex_generic:
         raise HTTPException(status_code=500, detail=f"DB module error: {ex_generic}")
 
+# ===========================================================
+# Enterprise fallback gating (ใช้เมื่อ legacy checker ไม่ผ่าน)
+# ===========================================================
+STANDARD_BASE: set[str] = {
+    "cfs", "cfp", "cfpr",           # cashflow family considered STANDARD in your matrix
+    "revs", "capexs", "fxs", "costs",
+    "buds", "reps", "vars", "mars", "fors", "decs",
+}
+
+def _enterprise_allows(email: str, short_sku: str) -> Tuple[bool, str]:
+    """
+    ใช้ entitlement จาก app.enterprise เพื่อ gate เฉพาะ Copilot (*_ms)
+      - en_standard      -> อนุญาตเฉพาะ STANDARD_BASE เป็น *_ms
+      - en_professional  -> อนุญาตทั้งหมด *_ms
+      - en_unlimited     -> อนุญาตทั้งหมด *_ms
+    """
+    if not enterprise_api:
+        return False, "enterprise-api-missing"
+
+    platform = derive_platform_from_sku(short_sku)
+    if platform != "Copilot":
+        return False, "not-copilot"
+
+    try:
+        ent = enterprise_api.entitlements_for_email(email)
+    except Exception as e:
+        log.warning("enterprise_api.entitlements_for_email error: %s", e)
+        return False, "enterprise-error"
+
+    if not ent or ent.get("scope") != "enterprise":
+        return False, "no-enterprise-plan"
+
+    plan = (ent.get("plan") or "").strip()
+    base = _drop_module0(short_sku).replace("_ms", "")
+    if plan == "Enterprise-Standard":
+        return (base in STANDARD_BASE), "enterprise-standard-allow" if (base in STANDARD_BASE) else "enterprise-standard-block"
+    # Professional/Unlimited
+    return True, "enterprise-all-allow"
+
 # ===== NEW: toggle & robust entitlement check =====
 DISABLE_ENTITLEMENT_CHECK = os.getenv("DISABLE_ENTITLEMENT_CHECK", "0") == "1"
 
@@ -297,23 +332,29 @@ def require_entitlement_or_403(user_email: str, sku: str):
     if DISABLE_ENTITLEMENT_CHECK:
         return agent_slug, platform
 
-    if not check_entitlement:
-        raise HTTPException(status_code=501, detail="Entitlement checker not available.")
+    # 1) ลอง legacy checker ก่อน
+    if check_entitlement:
+        candidates = [
+            (agent_slug, platform),
+            (short, platform),
+            (agent_slug.lower(), platform),
+            (agent_slug.upper(), platform),
+        ]
+        for cand, pf in candidates:
+            try:
+                if check_entitlement(user_email, cand, pf):
+                    return agent_slug, platform
+            except Exception as e:
+                log.warning("check_entitlement error on %s/%s: %s", cand, pf, e)
+    else:
+        log.info("check_entitlement missing, using enterprise fallback if possible.")
 
-    candidates = [
-        (agent_slug, platform),
-        (short, platform),
-        (agent_slug.lower(), platform),
-        (agent_slug.upper(), platform),
-    ]
-    for cand, pf in candidates:
-        try:
-            if check_entitlement(user_email, cand, pf):
-                return agent_slug, platform
-        except Exception as e:
-            log.warning("check_entitlement error on %s/%s: %s", cand, pf, e)
+    # 2) Fallback: enterprise gating (เฉพาะ Copilot)
+    ok, reason = _enterprise_allows(user_email, short)
+    if ok:
+        return agent_slug, platform
 
-    raise HTTPException(status_code=403, detail="No entitlement for this agent/platform.")
+    raise HTTPException(status_code=403, detail=f"No entitlement for this agent/platform ({reason}).")
 
 # ---------------------- Basics ----------------------
 @app.get("/")
@@ -395,31 +436,17 @@ if IS_DEBUG_ROUTES:
         except Exception as ex_dbping:
             return {"ok": False, "error": str(ex_dbping)}
 
-    @app.get("/debug/entitlements/{email}")
-    async def debug_entitlements_raw(email: str):
-        if not ent_resolver:
-            return {"ok": False, "error": "ent_resolver missing"}
-        try:
-            res = ent_resolver.resolve_entitlements(
-                email, precedence=os.getenv("ENT_PRECEDENCE", "rank")
-            )
-            return {"ok": True, "result": res}
-        except Exception as ex:
-            import traceback
-            return {"ok": False, "error": str(ex), "trace": traceback.format_exc().splitlines()[-8:]}
-
     @app.get("/debug/check-entitlement")
     async def debug_check_entitlement(email: str, sku: str):
         short = _drop_module0(sku)
         slug = resolve_agent_slug(short) or short.upper()
         plat = derive_platform_from_sku(short)
-        if not check_entitlement:
-            return {"ok": False, "error": "check_entitlement missing", "agent_slug": slug, "sku": short, "platform": plat}
-        try:
-            res_slug = False
-            res_sku = False
-            err_slug = None
-            err_sku = None
+
+        res_slug = False
+        res_sku = False
+        err_slug = None
+        err_sku = None
+        if check_entitlement:
             try:
                 res_slug = check_entitlement(email, slug, plat)
             except Exception as e1:
@@ -429,16 +456,16 @@ if IS_DEBUG_ROUTES:
             except Exception as e2:
                 err_sku = str(e2)
 
-            return {
-                "ok": bool(res_slug or res_sku),
-                "agent_slug": slug,
-                "sku": short,
-                "platform": plat,
-                "checked": {"slug": res_slug, "sku": res_sku},
-                "errors": {"slug": err_slug, "sku": err_sku},
-            }
-        except Exception as ex:
-            return {"ok": False, "error": str(ex), "agent_slug": slug, "sku": short, "platform": plat}
+        ent_ok, ent_reason = _enterprise_allows(email, short)
+
+        return {
+            "ok": bool(res_slug or res_sku or ent_ok),
+            "agent_slug": slug,
+            "sku": short,
+            "platform": plat,
+            "checked": {"slug": res_slug, "sku": res_sku, "enterprise": ent_ok},
+            "errors": {"slug": err_slug, "sku": err_sku, "enterprise": None if ent_ok else ent_reason},
+        }
 
 # ---------------------- Entitlements APIs ----------------------
 @app.get("/entitlements/{email}")
@@ -529,25 +556,24 @@ async def billing_thrivecart(request: Request):
     if not order_id or not email:
         raise HTTPException(status_code=400, detail="Missing order_id or customer[email]")
 
-    # ---- Platform canonicalization rules ----
-    # 1) Enterprise SKUs: force "Copilot" (DB queries expect this family)
-    # 2) Otherwise, honor explicit 'platform' if provided (MS/COPILOT/GEMINI/GPT) after normalization
-    # 3) Fallback to deriving from SKU suffix (_gemini/_ms) or default "GPT"
+    # Platform canonicalization
     if short_sku.startswith("en_"):
         platform = "Copilot"
     else:
         posted_platform = _norm_platform_tag(data.get("platform"))
         platform = posted_platform or derive_platform_from_sku(short_sku)
 
+    # Optional hook (best-effort)
     if enterprise_api:
         try:
-            enterprise_api.apply_thrivecart_event(data)  # best-effort side effect
+            enterprise_api.apply_thrivecart_event(data)  # no-op in current enterprise.py
         except Exception as e:
             log.warning("apply_thrivecart_event failed: %s", e)
 
     dbmod = _db()
     try:
         if short_sku.startswith("en_"):
+            # db.upsert_enterprise_license ถูกอัปเดตให้เขียนลง enterprise_licenses แล้ว
             await run_in_threadpool(
                 dbmod.upsert_enterprise_license, order_id, email, short_sku, agent_slug, platform
             )

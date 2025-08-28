@@ -85,19 +85,37 @@ def upsert_enterprise_license(
     status: str = "active",
 ):
     """
-    Store Copilot enterprise license (en_standard / en_professional / en_unlimited).
+    Store Copilot enterprise license (en_standard / en_professional / en_unlimited)
+    → บันทึกลงตาราง enterprise_licenses (PRIMARY) ไม่ใช่ subscriptions
     """
-    license_type = (sku or "").lower()
-    sub_id = f"tc-enterprise-{order_id}-{license_type}-{platform}".lower()
+    license_type = (sku or "").lower().strip()
+    if license_type not in ("en_standard", "en_professional", "en_unlimited"):
+        # ไม่ใช่ enterprise sku ก็ข้าม (คงพฤติกรรมเดิมไว้)
+        return False
+
+    domain = (user_email or "").split("@")[-1].lower().strip()
+    if not domain:
+        print("DB warn: upsert_enterprise_license got bad purchaser email:", user_email)
+        return False
+
+    tier_code = (
+        "STANDARD" if license_type == "en_standard"
+        else "PROFESSIONAL" if license_type == "en_professional"
+        else "UNLIMITED"
+    )
+
     sql = """
-        INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, now(), now())
-        ON CONFLICT (id)
-        DO UPDATE SET platform   = EXCLUDED.platform,
-                      status     = EXCLUDED.status,
-                      updated_at = now();
+        INSERT INTO enterprise_licenses (domain, sku, tier_code, active, activated_at, expires_at, last_order_id)
+        VALUES (%s, %s, %s, TRUE, NOW(), NULL, %s)
+        ON CONFLICT (domain, sku)
+        DO UPDATE SET tier_code     = EXCLUDED.tier_code,
+                      active        = TRUE,
+                      activated_at  = NOW(),
+                      expires_at    = NULL,
+                      last_order_id = EXCLUDED.last_order_id;
     """
-    return _upsert(sql, (sub_id, user_email, sku, platform, status))
+    # order_id ใช้เก็บใน last_order_id เพื่อ audit
+    return _upsert(sql, (domain, license_type, tier_code, order_id))
 
 def cancel_subscription(user_email: str, sku: str | None = None):
     """
@@ -161,6 +179,81 @@ def fetch_effective_agents(user_email: str):
         print(f"DB error: {ex}")
         return []
 
+# ---------- Enterprise helpers ----------
+def fetch_enterprise_licenses_for_domain(domain: str):
+    """
+    คืนรายการ license ทั้งหมดของโดเมนจาก enterprise_licenses (สำหรับ snapshot)
+    """
+    d = (domain or "").lower().strip()
+    if not d:
+        return []
+    sql = """
+        SELECT domain, sku, tier_code, active, activated_at, expires_at, last_order_id
+          FROM enterprise_licenses
+         WHERE domain = %s
+         ORDER BY activated_at DESC
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (d,))
+            return cur.fetchall()
+    except Exception as ex:
+        print(f"DB error: {ex}")
+        return []
+
+def get_active_enterprise_license_for_domain(domain: str):
+    """
+    คืน license enterprise ล่าสุดของโดเมน (PRIMARY: enterprise_licenses)
+    ถ้าไม่พบ ค่อย fallback ไปตาราง subscriptions (ของเก่า)
+    รูปแบบรีเทิร์นให้ใกล้เคียง subscriptions เพื่อใช้กับ checker เดิม:
+      { sku, platform, status, user_email, created_at, tier_code? }
+    """
+    d = (domain or "").lower().strip()
+    if not d:
+        return None
+
+    # 1) ดูจาก enterprise_licenses ก่อน
+    sql1 = """
+        SELECT sku, tier_code, active, activated_at
+          FROM enterprise_licenses
+         WHERE domain = %s AND active IS TRUE
+         ORDER BY activated_at DESC
+         LIMIT 1
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql1, (d,))
+            row = cur.fetchone()
+            if row:
+                return {
+                    "sku": row["sku"],
+                    "platform": "Copilot",
+                    "status": "active" if row.get("active") else "inactive",
+                    "user_email": f"*@{d}",
+                    "created_at": row.get("activated_at"),
+                    "tier_code": row.get("tier_code"),
+                }
+    except Exception as ex:
+        print(f"DB error: {ex}")
+
+    # 2) fallback: subscriptions (รองรับข้อมูลเก่า)
+    sql2 = """
+        SELECT sku, platform, status, user_email, created_at
+          FROM subscriptions
+         WHERE status = 'active'
+           AND sku IN ('en_standard','en_professional','en_unlimited')
+           AND lower(split_part(user_email,'@',2)) = lower(%s)
+         ORDER BY created_at DESC
+         LIMIT 1
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(sql2, (d,))
+            return cur.fetchone()
+    except Exception as ex:
+        print(f"DB error: {ex}")
+        return None
+
 # ---------- Trial Users ----------
 def get_trial_users_by_day(day_offset: int = 0):
     """
@@ -216,27 +309,8 @@ __all__ = [
     "cancel_subscription",
     "fetch_subscriptions",
     "fetch_effective_agents",
+    "fetch_enterprise_licenses_for_domain",
+    "get_active_enterprise_license_for_domain",
     "get_trial_users_by_day",
     "ensure_permanent_admin_user",
 ]
-def get_active_enterprise_license_for_domain(domain: str):
-    """
-    คืน license enterprise ล่าสุดของโดเมน (เฉพาะ en_* และสถานะ active)
-    ใช้ split_part(user_email,'@',2) เพื่อ map ความเป็นบริษัทจากอีเมลผู้ซื้อ
-    """
-    sql = """
-        SELECT sku, platform, status, user_email, created_at
-          FROM subscriptions
-         WHERE status = 'active'
-           AND sku IN ('en_standard','en_professional','en_unlimited')
-           AND lower(split_part(user_email,'@',2)) = lower(%s)
-         ORDER BY created_at DESC
-         LIMIT 1;
-    """
-    try:
-        with _connect() as conn, conn.cursor() as cur:
-            cur.execute(sql, (domain,))
-            return cur.fetchone()
-    except Exception as ex:
-        print(f"DB error: {ex}")
-        return None
