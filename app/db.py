@@ -3,11 +3,18 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 
-# ===== Feature flags =====
+# ===== Feature flags (ของเดิม) =====
 # เขียนซ้ำลง subscriptions เพื่อความเข้ากันได้ย้อนหลัง (ค่าเริ่มต้น: เปิด)
 EN_DUAL_WRITE = os.getenv("EN_DUAL_WRITE", "1") == "1"
 # บังคับให้โดเมนหนึ่งมี active ได้ครั้งละ 1 แผน: ปิดตัวอื่นอัตโนมัติ (ค่าเริ่มต้น: เปิด)
 EN_DEACTIVATE_OTHERS = os.getenv("EN_DEACTIVATE_OTHERS", "1") == "1"
+
+# ===== New: table names (เผื่อ future rename) =====
+TBL_TENANTS          = os.getenv("TBL_TENANTS", "tenants")
+TBL_API_KEYS         = os.getenv("TBL_API_KEYS", "api_keys")
+TBL_SUBS_ENT         = os.getenv("TBL_SUBS_ENT", "ent_subscriptions")     # แผน ENT_STANDARD/ENT_PLUS/ENT_PRO
+TBL_USAGE            = os.getenv("TBL_USAGE", "usage_counters")           # calls/yyyymm
+TBL_IDEM             = os.getenv("TBL_IDEM", "idempotency_keys")
 
 # ---------- Connection ----------
 def _connect():
@@ -27,6 +34,77 @@ def _upsert(sql: str, params: tuple) -> bool:
         print(f"DB error: {ex}")
         return False
 
+def _exec(sql: str, params: tuple | None = None):
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        conn.commit()
+
+def _fetchone(sql: str, params: tuple | None = None):
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        return cur.fetchone()
+
+def _fetchall(sql: str, params: tuple | None = None):
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        return cur.fetchall()
+
+# ---------- Ensure quota schema (lazy) ----------
+def _ensure_quota_schema():
+    """
+    สร้างตารางที่จำเป็นสำหรับ Thin API quota/plan หากยังไม่มี
+    - tenants, api_keys, ent_subscriptions, usage_counters, idempotency_keys
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {TBL_TENANTS} (
+              id BIGSERIAL PRIMARY KEY,
+              name TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active',
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {TBL_API_KEYS} (
+              id BIGSERIAL PRIMARY KEY,
+              tenant_id BIGINT NOT NULL REFERENCES {TBL_TENANTS}(id) ON DELETE CASCADE,
+              key_hash CHAR(64) NOT NULL UNIQUE,
+              active BOOLEAN NOT NULL DEFAULT TRUE,
+              expires_at TIMESTAMPTZ,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {TBL_SUBS_ENT} (
+              tenant_id BIGINT NOT NULL REFERENCES {TBL_TENANTS}(id) ON DELETE CASCADE,
+              plan_code TEXT NOT NULL,                     -- ENT_STANDARD / ENT_PLUS / ENT_PRO
+              monthly_quota INT NOT NULL,
+              extra_quota_balance INT NOT NULL DEFAULT 0,  -- โควตาซื้อเพิ่มคงเหลือ (add-on)
+              renew_day SMALLINT NOT NULL DEFAULT 1,       -- 1..28 (วันตัดรอบ)
+              status TEXT NOT NULL DEFAULT 'active',
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              PRIMARY KEY (tenant_id)
+            );
+        """)
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {TBL_USAGE} (
+              tenant_id BIGINT NOT NULL REFERENCES {TBL_TENANTS}(id) ON DELETE CASCADE,
+              period_yyyymm CHAR(7) NOT NULL,              -- 'YYYY-MM'
+              calls_used INT NOT NULL DEFAULT 0,
+              PRIMARY KEY (tenant_id, period_yyyymm)
+            );
+        """)
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {TBL_IDEM} (
+              tenant_id BIGINT NOT NULL REFERENCES {TBL_TENANTS}(id) ON DELETE CASCADE,
+              idem_key TEXT NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              PRIMARY KEY (tenant_id, idem_key)
+            );
+        """)
+        conn.commit()
+
 # ---------- Health ----------
 def ping_db():
     try:
@@ -36,7 +114,9 @@ def ping_db():
     except Exception:
         return False
 
-# ---------- Subscriptions (align with main.py webhook) ----------
+# ======================================================================
+# Existing (เดิม) — Subscriptions / Entitlements ที่ใช้กับ webhook ตัวเก่า
+# ======================================================================
 def upsert_subscription_and_entitlement(
     order_id: str,
     user_email: str,
@@ -316,6 +396,7 @@ def ensure_permanent_admin_user():
     """
     Ensure thanyaaura@email.com always has permanent 'all' subscriptions
     across GPT, Gemini, and Copilot.
+    (และ ensure โครงสร้างตาราง thin quota)
     """
     sql = """
         INSERT INTO subscriptions (id, user_email, sku, platform, status, created_at, updated_at)
@@ -332,13 +413,190 @@ def ensure_permanent_admin_user():
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(sql)
             conn.commit()
-            print("✅ Permanent admin user ensured in DB")
+            _ensure_quota_schema()
+            print("✅ Permanent admin user ensured in DB; quota schema ensured")
             return True
     except Exception as ex:
         print(f"DB error ensuring permanent admin user: {ex}")
+        try:
+            _ensure_quota_schema()
+        except Exception as ex2:
+            print(f"DB error ensuring quota schema: {ex2}")
         return False
 
+# ======================================================================
+# New for Thin API quota/plan (ใช้โดย app.limits.require_tenant_and_quota)
+# ======================================================================
+
+# --- Tenant & API key management ---
+def create_or_update_tenant_with_key(name: str, api_key_hash: str, active: bool = True) -> int:
+    """
+    สร้าง/แก้ไข tenant + api key (hash แล้ว) — คืน tenant_id
+    หมายเหตุ: api_key_hash = sha256(plain).hexdigest() (ทำในแอปก่อนส่งมา)
+    """
+    _ensure_quota_schema()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(f"INSERT INTO {TBL_TENANTS}(name, status) VALUES (%s,'active') RETURNING id;", (name,))
+        tid = cur.fetchone()["id"]
+        cur.execute(f"""
+            INSERT INTO {TBL_API_KEYS}(tenant_id, key_hash, active)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (key_hash) DO UPDATE SET
+                tenant_id = EXCLUDED.tenant_id,
+                active = EXCLUDED.active;
+        """, (tid, api_key_hash, active))
+        conn.commit()
+        return tid
+
+def add_or_rotate_api_key(tenant_id: int, api_key_hash: str, active: bool = True):
+    _ensure_quota_schema()
+    return _upsert(
+        f"""
+        INSERT INTO {TBL_API_KEYS}(tenant_id, key_hash, active)
+        VALUES (%s,%s,%s)
+        ON CONFLICT (key_hash) DO UPDATE SET
+            tenant_id = EXCLUDED.tenant_id,
+            active = EXCLUDED.active,
+            expires_at = NULL;
+        """,
+        (tenant_id, api_key_hash, active),
+    )
+
+def get_tenant_by_api_key_hash(key_hash: str):
+    """
+    RETURN: { id, name, status, created_at } | None
+    """
+    _ensure_quota_schema()
+    sql = f"""
+        SELECT t.id, t.name, t.status, t.created_at
+          FROM {TBL_API_KEYS} k
+          JOIN {TBL_TENANTS} t ON t.id = k.tenant_id
+         WHERE k.key_hash = %s
+           AND k.active IS TRUE
+           AND (k.expires_at IS NULL OR k.expires_at > now())
+         LIMIT 1;
+    """
+    try:
+        return _fetchone(sql, (key_hash,))
+    except Exception as ex:
+        print(f"DB error get_tenant_by_api_key_hash: {ex}")
+        return None
+
+# --- Subscription (ENT_STANDARD / ENT_PLUS / ENT_PRO) ---
+def set_tenant_subscription(tenant_id: int, plan_code: str, monthly_quota: int, renew_day: int = 1, status: str = "active"):
+    """
+    กำหนด/อัปเดตแผน Thin ของ tenant
+    plan_code: ENT_STANDARD / ENT_PLUS / ENT_PRO
+    monthly_quota: จำนวน calls/เดือน
+    renew_day: วันตัดรอบ (1..28) — มักตั้งตามวันชำระเงินบิลแรก
+    """
+    _ensure_quota_schema()
+    sql = f"""
+        INSERT INTO {TBL_SUBS_ENT}(tenant_id, plan_code, monthly_quota, extra_quota_balance, renew_day, status, created_at, updated_at)
+        VALUES (%s, %s, %s, 0, %s, %s, now(), now())
+        ON CONFLICT (tenant_id) DO UPDATE SET
+            plan_code = EXCLUDED.plan_code,
+            monthly_quota = EXCLUDED.monthly_quota,
+            renew_day = EXCLUDED.renew_day,
+            status = EXCLUDED.status,
+            updated_at = now();
+    """
+    return _upsert(sql, (tenant_id, plan_code, monthly_quota, renew_day, status))
+
+def add_quota_addon(tenant_id: int, addon_calls: int):
+    """
+    เติมโควตาเพิ่มเข้าบัญชี tenant (เช่น ซื้อ addon_1k x 3 = 3,000 calls)
+    """
+    _ensure_quota_schema()
+    sql = f"""
+        UPDATE {TBL_SUBS_ENT}
+           SET extra_quota_balance = COALESCE(extra_quota_balance,0) + %s,
+               updated_at = now()
+         WHERE tenant_id = %s;
+    """
+    return _upsert(sql, (addon_calls, tenant_id))
+
+def get_subscription_by_tenant_id(tenant_id: int):
+    """
+    RETURN: { tenant_id, plan_code, monthly_quota, extra_quota_balance, renew_day, status } | None
+    """
+    _ensure_quota_schema()
+    sql = f"SELECT * FROM {TBL_SUBS_ENT} WHERE tenant_id = %s AND status = 'active' LIMIT 1;"
+    try:
+        return _fetchone(sql, (tenant_id,))
+    except Exception as ex:
+        print(f"DB error get_subscription_by_tenant_id: {ex}")
+        return None
+
+# --- Usage & Idempotency ---
+def ensure_usage_bucket(tenant_id: int, yyyymm: str):
+    _ensure_quota_schema()
+    sql = f"""
+        INSERT INTO {TBL_USAGE}(tenant_id, period_yyyymm, calls_used)
+        VALUES (%s, %s, 0)
+        ON CONFLICT (tenant_id, period_yyyymm) DO NOTHING;
+    """
+    return _upsert(sql, (tenant_id, yyyymm))
+
+def get_calls_used(tenant_id: int, yyyymm: str) -> int:
+    _ensure_quota_schema()
+    sql = f"SELECT calls_used FROM {TBL_USAGE} WHERE tenant_id = %s AND period_yyyymm = %s;"
+    try:
+        row = _fetchone(sql, (tenant_id, yyyymm))
+        return int(row["calls_used"]) if row and row.get("calls_used") is not None else 0
+    except Exception as ex:
+        print(f"DB error get_calls_used: {ex}")
+        return 0
+
+def increment_calls_used(tenant_id: int, yyyymm: str, amount: int) -> bool:
+    _ensure_quota_schema()
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(f"""
+                UPDATE {TBL_USAGE}
+                   SET calls_used = calls_used + %s
+                 WHERE tenant_id = %s AND period_yyyymm = %s;
+            """, (amount, tenant_id, yyyymm))
+            if cur.rowcount == 0:
+                # fallback: create bucket then retry once
+                cur.execute(f"""
+                    INSERT INTO {TBL_USAGE}(tenant_id, period_yyyymm, calls_used)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (tenant_id, period_yyyymm) DO UPDATE SET
+                        calls_used = {TBL_USAGE}.calls_used + EXCLUDED.calls_used;
+                """, (tenant_id, yyyymm, amount))
+            conn.commit()
+            return True
+    except Exception as ex:
+        print(f"DB error increment_calls_used: {ex}")
+        return False
+
+def seen_idempotency(tenant_id: int, idem_key: str | None) -> bool:
+    if not idem_key:
+        return False
+    _ensure_quota_schema()
+    sql = f"SELECT 1 FROM {TBL_IDEM} WHERE tenant_id = %s AND idem_key = %s;"
+    try:
+        row = _fetchone(sql, (tenant_id, idem_key))
+        return bool(row)
+    except Exception as ex:
+        print(f"DB error seen_idempotency: {ex}")
+        return False
+
+def write_idempotency(tenant_id: int, idem_key: str):
+    _ensure_quota_schema()
+    sql = f"""
+        INSERT INTO {TBL_IDEM}(tenant_id, idem_key, created_at)
+        VALUES (%s, %s, now())
+        ON CONFLICT (tenant_id, idem_key) DO NOTHING;
+    """
+    return _upsert(sql, (tenant_id, idem_key))
+
+# ======================================================================
+# __all__
+# ======================================================================
 __all__ = [
+    # health & legacy
     "ping_db",
     "upsert_subscription_and_entitlement",
     "upsert_tier_subscription",
@@ -350,4 +608,16 @@ __all__ = [
     "get_active_enterprise_license_for_domain",
     "get_trial_users_by_day",
     "ensure_permanent_admin_user",
+    # thin/quota
+    "create_or_update_tenant_with_key",
+    "add_or_rotate_api_key",
+    "set_tenant_subscription",
+    "add_quota_addon",
+    "get_tenant_by_api_key_hash",
+    "get_subscription_by_tenant_id",
+    "ensure_usage_bucket",
+    "get_calls_used",
+    "increment_calls_used",
+    "seen_idempotency",
+    "write_idempotency",
 ]

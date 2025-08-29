@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from json import JSONDecodeError
 from typing import Optional, Dict, Any, Tuple, List, Literal
 
-from fastapi import FastAPI, HTTPException, Request, Depends, Response, Header, Body
+from fastapi import FastAPI, HTTPException, Request, Depends, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
@@ -163,7 +163,21 @@ except Exception as e:
     check_entitlement = None
     log.warning("enterprise_access.check_entitlement not available (%s).", e)
 
-app = FastAPI(title="Thanyaaura Gateway", version="1.9.2")
+# ---------- OPTIONAL quota/plan checker for /v1/run ----------
+try:
+    from app.limits import require_tenant_and_quota  # optional quota checker
+except Exception as e:
+    require_tenant_and_quota = None
+    log.warning("limits module not available (%s). Quota checks will be skipped.", e)
+
+# ---------- Agent tier classifier (use this instead of hard-coded slug sets) ----------
+try:
+    from app.agent_tiers import classify_agent_tier  # STANDARD/PLUS/PREMIUM
+except Exception as e:
+    classify_agent_tier = None  # type: ignore
+    log.warning("agent_tiers.classify_agent_tier not available (%s). Tier-based checks limited.", e)
+
+app = FastAPI(title="Thanyaaura Gateway", version="1.9.4")
 
 # ---------- CORS ----------
 def _parse_csv_env(name: str, default_list: list[str]) -> list[str]:
@@ -233,7 +247,7 @@ def derive_platform_from_sku(sku: Optional[str]) -> str:
         return "Gemini"
     if s.endswith("_ms"):
         return "Copilot"
-    if s.startswith("en_"):  # ENTERPRISE LICENSES → canonicalize to "Copilot"
+    if s.startswith("en_"):
         return "Copilot"
     return "GPT"
 
@@ -285,35 +299,14 @@ def _db():
 # Enterprise fallback gating (ใช้เมื่อ legacy checker ไม่ผ่าน)
 # ===========================================================
 STANDARD_BASE: set[str] = {
-    "cfs", "cfp", "cfpr",           # cashflow family considered STANDARD in your matrix
+    "cfs", "cfp", "cfpr",
     "revs", "capexs", "fxs", "costs",
     "buds", "reps", "vars", "mars", "fors", "decs",
 }
 
-# สำหรับ /v1/run (agent_slug) — Standard plan อนุญาตเฉพาะ agent slug กลุ่ม standard
-STANDARD_ALLOWED_AGENT_SLUGS: set[str] = {
-    "SINGLE_CF_AI_AGENT",
-    "PROJECT_CF_AI_AGENT",
-    "ENTERPRISE_CF_AI_AGENT",
-    "REVENUE_STANDARD",
-    "CAPEX_STANDARD",
-    "FX_STANDARD",
-    "COST_STANDARD",
-    "BUDGET_STANDARD",
-    "REPORT_STANDARD",
-    "VARIANCE_STANDARD",
-    "MARGIN_STANDARD",
-    "FORECAST_STANDARD",
-    "DECISION_STANDARD",
-}
+DISABLE_ENTITLEMENT_CHECK = os.getenv("DISABLE_ENTITLEMENT_CHECK", "0") == "1"
 
 def _enterprise_allows(email: str, short_sku: str) -> Tuple[bool, str]:
-    """
-    ใช้ entitlement จาก app.enterprise เพื่อ gate เฉพาะ Copilot (*_ms)
-      - en_standard      -> อนุญาตเฉพาะ STANDARD_BASE เป็น *_ms
-      - en_professional  -> อนุญาตทั้งหมด *_ms
-      - en_unlimited     -> อนุญาตทั้งหมด *_ms
-    """
     if not enterprise_api:
         return False, "enterprise-api-missing"
 
@@ -334,22 +327,16 @@ def _enterprise_allows(email: str, short_sku: str) -> Tuple[bool, str]:
     base = _drop_module0(short_sku).replace("_ms", "")
     if plan == "Enterprise-Standard":
         return (base in STANDARD_BASE), "enterprise-standard-allow" if (base in STANDARD_BASE) else "enterprise-standard-block"
-    # Professional/Unlimited
     return True, "enterprise-all-allow"
-
-# ===== NEW: entitlement check by SKU (existing) & by agent_slug (new for /v1/run) =====
-DISABLE_ENTITLEMENT_CHECK = os.getenv("DISABLE_ENTITLEMENT_CHECK", "0") == "1"
 
 def require_entitlement_or_403(user_email: str, sku: str):
     short = _drop_module0(sku)
     agent_slug = resolve_agent_slug(short) or short.upper()
     platform = derive_platform_from_sku(short)
 
-    # bypass flag for demo
     if DISABLE_ENTITLEMENT_CHECK:
         return agent_slug, platform
 
-    # 1) ลอง legacy checker ก่อน
     if check_entitlement:
         candidates = [
             (agent_slug, platform),
@@ -366,15 +353,19 @@ def require_entitlement_or_403(user_email: str, sku: str):
     else:
         log.info("check_entitlement missing, using enterprise fallback if possible.")
 
-    # 2) Fallback: enterprise gating (เฉพาะ Copilot)
     ok, reason = _enterprise_allows(user_email, short)
     if ok:
         return agent_slug, platform
 
     raise HTTPException(status_code=403, detail=f"No entitlement for this agent/platform ({reason}).")
 
+# === New: agent_slug check uses tier instead of hard-coded slug set ===
 def _enterprise_allows_agent_slug(email: str, agent_slug: str, platform: str) -> Tuple[bool, str]:
-    """ใช้กับ /v1/run (ไม่มี SKU)"""
+    """
+    ใช้กับ /v1/run (ไม่มี SKU) — gate เฉพาะ Copilot:
+      - Enterprise-Standard  => อนุญาตเฉพาะ agents ที่ classify เป็น STANDARD
+      - Enterprise-Professional/Unlimited => อนุญาตทั้งหมด
+    """
     if platform != "Copilot" or not enterprise_api:
         return False, "not-copilot-or-no-enterprise-api"
     try:
@@ -384,17 +375,21 @@ def _enterprise_allows_agent_slug(email: str, agent_slug: str, platform: str) ->
         return False, "enterprise-error"
     if not ent or ent.get("scope") != "enterprise":
         return False, "no-enterprise-plan"
+
     plan = (ent.get("plan") or "").strip()
     if plan == "Enterprise-Standard":
-        return (agent_slug in STANDARD_ALLOWED_AGENT_SLUGS), "enterprise-standard-allow" if (agent_slug in STANDARD_ALLOWED_AGENT_SLUGS) else "enterprise-standard-block"
+        if callable(classify_agent_tier):
+            tier = classify_agent_tier(agent_slug)
+            return (tier == "STANDARD"), "enterprise-standard-allow" if (tier == "STANDARD") else "enterprise-standard-block"
+        # ถ้าไม่มี classifier ให้ play-safe ปิดไว้
+        return False, "classifier-missing"
+    # Professional/Unlimited → allow all
     return True, "enterprise-all-allow"
 
 def require_entitlement_for_agent_slug_or_403(user_email: str, agent_slug: str, platform: str):
-    """ใช้กับ /v1/run — ตรวจสิทธิ์ด้วย agent_slug โดยตรง"""
     if DISABLE_ENTITLEMENT_CHECK:
         return
 
-    # 1) legacy checker (ถ้ามี)
     if check_entitlement:
         try:
             if check_entitlement(user_email, agent_slug, platform):
@@ -402,7 +397,6 @@ def require_entitlement_for_agent_slug_or_403(user_email: str, agent_slug: str, 
         except Exception as e:
             log.warning("check_entitlement error on %s/%s: %s", agent_slug, platform, e)
 
-    # 2) enterprise fallback (เฉพาะ Copilot)
     ok, reason = _enterprise_allows_agent_slug(user_email, agent_slug, platform)
     if ok:
         return
@@ -564,16 +558,14 @@ async def run_agent(sku: str, req: RunAgentRequest):
     # ---- Try to dispatch to real runner if available ----
     result: Dict[str, Any] = {"agent": agent_slug, "platform": platform, "echo": (req.payload or {})}
     try:
-        # Prefer new style runner
         AgentRunner = None  # type: ignore
         try:
-            from app.runners.agent_runner import AgentRunner as _AR  # your unified runner
+            from app.runners.agent_runner import AgentRunner as _AR
             AgentRunner = _AR
         except Exception:
             AgentRunner = None
         if AgentRunner:
             runner = AgentRunner()
-            # Best-effort call signature
             out = await runner.run(agent_slug=agent_slug, provider=None, model_override=None, payload=(req.payload or {}))
             result = {"agent": agent_slug, "platform": platform, "result": out}
     except Exception as e:
@@ -599,9 +591,59 @@ async def read_payload(request: Request) -> dict:
         log.warning("Form parse error: %s", ex_form)
         return {}
 
+# ====== Thin plan + Add-on: SKU mapping ======
+THIN_PLAN_SKU_MAP = {
+    "enterprise-standard": ("ENT_STANDARD", 10_000),
+    "enterprise-plus": ("ENT_PLUS", 30_000),
+    "enterprise-professional": ("ENT_PRO", 100_000),
+    "ent_standard": ("ENT_STANDARD", 10_000),
+    "ent_plus": ("ENT_PLUS", 30_000),
+    "ent_pro": ("ENT_PRO", 100_000),
+    # หากจะใช้ SKU ใหม่แบบตรงตัว:
+    "ent_standard_sku": ("ENT_STANDARD", 10_000),  # optional example
+    "ent_plus_sku": ("ENT_PLUS", 30_000),          # optional example
+    "ent_pro_sku": ("ENT_PRO", 100_000),           # optional example
+}
+
+ADDON_SKU_MAP = {
+    "addon_1k": 1_000,
+    "addon_5k": 5_000,
+    "addon_10k": 10_000,
+}
+
+def _get_passthrough_str(d: Dict[str, Any], key: str) -> Optional[str]:
+    return (
+        d.get(f"passthrough[{key}]")
+        or (d.get("passthrough") or {}).get(key) if isinstance(d.get("passthrough"), dict) else d.get(key)
+    )
+
+def _as_int(x: Any, default: int = 0) -> int:
+    try:
+        return int(x)
+    except Exception:
+        return default
+
+def _renew_day_from_payload(data: Dict[str, Any]) -> int:
+    import datetime as _dt
+    cand = data.get("order_date") or data.get("event_date") or data.get("timestamp")
+    try:
+        if isinstance(cand, (int, float)):
+            d = _dt.datetime.utcfromtimestamp(float(cand))
+        else:
+            d = _dt.datetime.fromisoformat(str(cand).replace("Z", "+00:00"))
+        return max(1, min(28, d.day))
+    except Exception:
+        return max(1, min(28, _dt.datetime.utcnow().day))
+
 # ---------------------- ThriveCart webhook ----------------------
 @app.post("/billing/thrivecart")
 async def billing_thrivecart(request: Request):
+    """
+    รองรับทั้งสินค้าเดิม (agent/tier/en_*) และสินค้าใหม่:
+      - Thin plan: Enterprise-Standard / -Plus / -Professional  -> set_tenant_subscription(plan_code, monthly_quota, renew_day)
+      - Add-on:    addon_1k / addon_5k / addon_10k             -> add_quota_addon(tenant_id, total_calls)
+    ต้องมี tenant_id ใน passthrough เมื่อเป็น thin plan หรือ add-on
+    """
     data = await read_payload(request)
 
     secret_in = (
@@ -618,6 +660,72 @@ async def billing_thrivecart(request: Request):
         raise HTTPException(status_code=400, detail="Missing SKU (or fulfillment[url])")
 
     short_sku = _drop_module0(sku)
+    sku_l = short_sku.lower()
+
+    # --- Thin plan (tenant subscription) ---
+    if sku_l in THIN_PLAN_SKU_MAP:
+        tenant_id_str = _get_passthrough_str(data, "tenant_id")
+        tenant_id = _as_int(tenant_id_str, 0)
+        if tenant_id <= 0:
+            raise HTTPException(status_code=400, detail="Missing tenant_id in passthrough for enterprise plan")
+
+        plan_code, monthly_quota = THIN_PLAN_SKU_MAP[sku_l]
+        renew_day = _renew_day_from_payload(data)
+
+        dbmod = _db()
+        try:
+            ok = await run_in_threadpool(
+                dbmod.set_tenant_subscription, tenant_id, plan_code, int(monthly_quota), int(renew_day), "active"
+            )
+            if not ok:
+                raise RuntimeError("set_tenant_subscription failed")
+        except Exception as ex_plan:
+            raise HTTPException(status_code=500, detail=f"DB error (set_tenant_subscription): {ex_plan}")
+
+        return {
+            "ok": True,
+            "type": "THIN_PLAN",
+            "tenant_id": tenant_id,
+            "plan_code": plan_code,
+            "monthly_quota": int(monthly_quota),
+            "renew_day": int(renew_day),
+            "sku": sku_l,
+        }
+
+    # --- Add-on calls ---
+    if sku_l in ADDON_SKU_MAP:
+        tenant_id_str = _get_passthrough_str(data, "tenant_id")
+        tenant_id = _as_int(tenant_id_str, 0)
+        if tenant_id <= 0:
+            raise HTTPException(status_code=400, detail="Missing tenant_id in passthrough for add-on")
+
+        qty = _as_int(
+            data.get("quantity")
+            or _get_passthrough_str(data, "quantity")
+            or data.get("product[quantity]"),
+            1
+        )
+        per_block = ADDON_SKU_MAP[sku_l]
+        total_add = int(per_block) * max(1, qty)
+
+        dbmod = _db()
+        try:
+            ok = await run_in_threadpool(dbmod.add_quota_addon, int(tenant_id), int(total_add))
+            if not ok:
+                raise RuntimeError("add_quota_addon failed")
+        except Exception as ex_add:
+            raise HTTPException(status_code=500, detail=f"DB error (add_quota_addon): {ex_add}")
+
+        return {
+            "ok": True,
+            "type": "ADDON",
+            "tenant_id": int(tenant_id),
+            "calls_added": int(total_add),
+            "sku": sku_l,
+            "qty_blocks": int(max(1, qty)),
+        }
+
+    # === Legacy (agent/tier/en_*) — keep compatibility ===
     tier_code = resolve_tier_code(short_sku)
     agent_slug = None if tier_code else resolve_agent_slug(short_sku)
     if not tier_code and not agent_slug and not short_sku.startswith("en_"):
@@ -645,7 +753,6 @@ async def billing_thrivecart(request: Request):
     dbmod = _db()
     try:
         if short_sku.startswith("en_"):
-            # db.upsert_enterprise_license ถูกอัปเดตให้เขียนลง enterprise_licenses แล้ว
             await run_in_threadpool(
                 dbmod.upsert_enterprise_license, order_id, email, short_sku, agent_slug, platform
             )
@@ -729,7 +836,6 @@ def _get_jwks():
 
 def _decode_bearer_token(token: str) -> Dict[str, Any]:
     if not _jose_available or not (JWKS_URL and OAUTH_AUD and OAUTH_ISS):
-        # Dev mode fallback
         if ALLOW_DEV_BEARER:
             return {"scp": REQUIRED_SCOPE, "preferred_username": os.getenv("DEV_EMAIL", "dev@example.com")}
         raise HTTPException(status_code=500, detail="JWT verification not configured")
@@ -771,6 +877,7 @@ class V1RunResponse(BaseModel):
 @app.post("/v1/run", summary="Run one finance agent by slug", tags=["v1"], response_model=V1RunResponse)
 async def v1_run(
     req: V1RunRequest,
+    request: Request,
     authorization: Optional[str] = Header(default=None)
 ):
     token = _extract_bearer(authorization)
@@ -784,14 +891,25 @@ async def v1_run(
     if not user_email:
         raise HTTPException(status_code=401, detail="Email not found in token")
 
-    # Platform inference: ตาม provider; ถ้าไม่ระบุ ให้ถือเป็น Copilot (ใช้กับ Custom Connector)
+    # Platform inference
     platform = "Copilot"
     if req.provider == "openai":
         platform = "GPT"
     elif req.provider == "gemini":
         platform = "Gemini"
 
-    # ตรวจ entitlement โดยตรงจาก agent_slug
+    # (optional) per-tenant quota/plan check if app.limits is available
+    if callable(require_tenant_and_quota):
+        try:
+            await require_tenant_and_quota(request, req.agent_slug)
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.warning("limits.require_tenant_and_quota error: %s", e)
+    else:
+        log.warning("limits module not loaded; skipping quota checks for /v1/run.")
+
+    # ตรวจ entitlement โดยตรงจาก agent_slug (tier-aware for Copilot Enterprise)
     require_entitlement_for_agent_slug_or_403(user_email, req.agent_slug, platform)
 
     # ---- Try to dispatch to real runner if available ----
@@ -801,8 +919,7 @@ async def v1_run(
     try:
         AgentRunner = None  # type: ignore
         try:
-            # preferred new runner
-            from app.runners.agent_runner import AgentRunner as _AR  # noqa
+            from app.runners.agent_runner import AgentRunner as _AR  # unified runner
             AgentRunner = _AR
         except Exception:
             AgentRunner = None
@@ -828,8 +945,12 @@ async def v1_run(
 
     except Exception as e:
         log.warning("Runner error (/v1/run): %s", e)
-        # ไม่ให้ 500 ทันที—คืนผลแบบ echo เพื่อให้ connector ทดสอบผ่านได้
         result["runner_error"] = str(e)
+
+    # (option) expose quota info from limits
+    result.setdefault("tenant_id", getattr(request.state, "tenant_id", None))
+    result.setdefault("plan_code", getattr(request.state, "plan_code", None))
+    result.setdefault("quota_checked", getattr(request.state, "quota_checked", False))
 
     return V1RunResponse(ok=True, result=result)
 
@@ -839,8 +960,13 @@ async def ensure_admin_on_startup():
     try:
         dbmod = importlib.import_module("app.db")
         await run_in_threadpool(dbmod.ensure_permanent_admin_user)
+        app.state.db = dbmod
     except Exception as ex:
         log.warning("Could not ensure permanent admin user: %s", ex)
+        try:
+            app.state.db = importlib.import_module("app.db")
+        except Exception as e2:
+            log.warning("app.db not importable for request state: %s", e2)
 
 # ---------------------- HEAD / (avoid 405 in probes) ----------------------
 @app.head("/")
